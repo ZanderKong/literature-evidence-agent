@@ -85,7 +85,12 @@ class MockProvider:
     No API key required. Used by default in tests.
     """
 
-    def __init__(self, fixed_claims: list[dict[str, Any]] | None = None, *, check_quotes: bool = True) -> None:
+    def __init__(
+        self,
+        fixed_claims: list[dict[str, Any]] | None = None,
+        *,
+        check_quotes: bool = True,
+    ) -> None:
         self._fixed_claims = fixed_claims or self._default_claims()
         self._check_quotes = check_quotes
 

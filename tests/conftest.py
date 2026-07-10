@@ -10,6 +10,7 @@ import pytest
 
 def _reload_config(workspace: Path) -> None:
     """Set workspace env var and reload config module."""
+    workspace = workspace.resolve()
     os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(workspace)
 
     # Reload config so the singleton picks up the new env var
@@ -19,6 +20,12 @@ def _reload_config(workspace: Path) -> None:
     # Also reload modules that import config at module level
     import evidence_agent.database.connection
     importlib.reload(evidence_agent.database.connection)
+
+    import evidence_agent.ingest.files
+    importlib.reload(evidence_agent.ingest.files)
+
+    import evidence_agent.parsers.pdf
+    importlib.reload(evidence_agent.parsers.pdf)
 
 
 def _cleanup_config() -> None:

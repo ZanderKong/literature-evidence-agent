@@ -7,7 +7,6 @@ Current implementation:
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
@@ -17,24 +16,11 @@ class TestSectionsPersistence:
     """Parsed sections must be written to the source_sections database table."""
 
     @pytest.fixture
-    def setup(self, tmp_workspace):
+    def setup(self, runtime_context):
         """Setup migrated workspace with an ingested source."""
-        import importlib
-        import evidence_agent.config
+        from evidence_agent.database.connection import get_connection
 
-        os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(tmp_workspace)
-        importlib.reload(evidence_agent.config)
-        import evidence_agent.database.connection
-        importlib.reload(evidence_agent.database.connection)
-
-        from evidence_agent.config import config
-        config.ensure_directories()
-
-        from evidence_agent.database.migrations import migrate
-        migrate()
-
-        # Create a source package
-        src_dir = config.sources_dir / "SRC-test-sec"
+        src_dir = runtime_context.sources_dir / "SRC-test-sec"
         src_dir.mkdir(parents=True, exist_ok=True)
 
         manifest = {
@@ -47,23 +33,16 @@ class TestSectionsPersistence:
         }
         (src_dir / "manifest.json").write_text(json.dumps(manifest))
 
-        # Copy a sample PDF
         import shutil
-        fixtures_pdf = tmp_workspace.parent.parent / "tests" / "fixtures" / "sample_article.pdf"
-        # Use a different path - we need to make the orig dir
-        # Actually, let's just create a minimal PDF with text
         orig_dir = src_dir / "original"
         orig_dir.mkdir(exist_ok=True)
 
-        # Use the real sample article PDF
         sample_pdf = (
             Path(__file__).resolve().parent.parent / "fixtures" / "sample_article.pdf"
         )
         if sample_pdf.exists():
             shutil.copy(sample_pdf, orig_dir / "main.pdf")
 
-        # Insert source into DB
-        from evidence_agent.database.connection import get_connection
         with get_connection() as conn:
             conn.execute(
                 "INSERT INTO sources (source_id, source_type, title, "
@@ -74,7 +53,7 @@ class TestSectionsPersistence:
                 "'2025-01-01T00:00:00', '2025-01-01T00:00:00')"
             )
 
-        return config
+        return runtime_context
 
     def test_analyse_does_not_persist_sections_to_db(self, setup):
         """After analyse, source_sections DB table should have data."""
@@ -97,13 +76,12 @@ class TestSectionsPersistence:
 
     def test_parser_writes_sections_to_files_but_not_db(self, setup):
         """Parse writes sections.jsonl but the database should also have them."""
-        from evidence_agent.config import config
         from evidence_agent.parsers.pdf import parse_pdf
 
-        package_dir = config.sources_dir / "SRC-test-sec"
+        ctx = setup
+        package_dir = ctx.sources_dir / "SRC-test-sec"
         result = parse_pdf("SRC-test-sec", package_dir)
 
-        # Verify the JSONL file exists
         sections_path = package_dir / "parsed" / "sections.jsonl"
         assert sections_path.exists(), "Parse didn't create sections.jsonl"
 
@@ -115,7 +93,6 @@ class TestSectionsPersistence:
 
         assert len(sections_from_file) > 0, "Parse produced 0 sections"
 
-        # Now verify DB has 0 sections (the flaw)
         from evidence_agent.database.connection import get_connection
         with get_connection(read_only=True) as conn:
             cursor = conn.execute(

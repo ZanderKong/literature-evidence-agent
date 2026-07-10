@@ -8,33 +8,30 @@ The current rebuild_from_packages implementation loses:
 """
 
 import json
-import os
 from pathlib import Path
 
 import pytest
+
+from evidence_agent.runtime import RuntimeContext, use_context
 
 
 class TestRebuildIdentity:
     """Rebuild must restore exact IDs and review state, not regenerate them."""
 
-    def test_rebuild_loses_locator_ids(self, tmp_workspace):
+    @pytest.fixture
+    def rebuild_ctx(self, tmp_path):
+        ws = tmp_path / "lea-ws"
+        ws.mkdir()
+        ctx = RuntimeContext(str(ws))
+        ctx.ensure_directories()
+        with use_context(ctx):
+            yield ctx
+
+    def test_rebuild_loses_locator_ids(self, rebuild_ctx):
         """After rebuild, locator IDs should match original, not be regenerated."""
-        import importlib
+        ctx = rebuild_ctx
 
-        import evidence_agent.config
-
-        # Resolve to avoid macOS /var vs /private/var symlink issue
-        ws = tmp_workspace.resolve()
-        os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(ws)
-        importlib.reload(evidence_agent.config)
-        import evidence_agent.database.connection
-        importlib.reload(evidence_agent.database.connection)
-
-        from evidence_agent.config import config
-        config.ensure_directories()
-
-        # Create a source package with known IDs
-        src_dir = config.sources_dir / "SRC-test001"
+        src_dir = ctx.sources_dir / "SRC-test001"
         src_dir.mkdir(parents=True, exist_ok=True)
 
         known_claim_id = "CLM-test001"
@@ -50,7 +47,6 @@ class TestRebuildIdentity:
         }
         (src_dir / "manifest.json").write_text(json.dumps(manifest))
 
-        # Write claims with known IDs
         analysis_dir = src_dir / "analysis"
         analysis_dir.mkdir(exist_ok=True)
         claims = [
@@ -71,16 +67,15 @@ class TestRebuildIdentity:
 
         from evidence_agent.database.rebuild import rebuild_from_packages
 
-        target_db = tmp_workspace.resolve() / "rebuilt.sqlite"
+        target_db = ctx.workspace_path / "rebuilt.sqlite"
         report = rebuild_from_packages(
-            source_dir=config.sources_dir, target_db=target_db
+            source_dir=ctx.sources_dir, target_db=target_db
         )
 
         import sqlite3
         conn = sqlite3.connect(str(target_db))
         conn.row_factory = sqlite3.Row
 
-        # Check locator ID is preserved, not regenerated
         loc_row = conn.execute(
             "SELECT locator_id FROM claim_locators WHERE claim_id = ?",
             (known_claim_id,),
@@ -98,21 +93,11 @@ class TestRebuildIdentity:
             f"losing the original."
         )
 
-    def test_rebuild_loses_review_status(self, tmp_workspace):
+    def test_rebuild_loses_review_status(self, rebuild_ctx):
         """After rebuild, review status should match original, not be reset to pending."""
-        import importlib
+        ctx = rebuild_ctx
 
-        import evidence_agent.config
-
-        os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(tmp_workspace.resolve())
-        importlib.reload(evidence_agent.config)
-        import evidence_agent.database.connection
-        importlib.reload(evidence_agent.database.connection)
-
-        from evidence_agent.config import config
-        config.ensure_directories()
-
-        src_dir = config.sources_dir / "SRC-test002"
+        src_dir = ctx.sources_dir / "SRC-test002"
         src_dir.mkdir(parents=True, exist_ok=True)
 
         manifest = {
@@ -147,8 +132,8 @@ class TestRebuildIdentity:
 
         from evidence_agent.database.rebuild import rebuild_from_packages
 
-        target_db = tmp_workspace.resolve() / "rebuilt.sqlite"
-        rebuild_from_packages(source_dir=config.sources_dir, target_db=target_db)
+        target_db = ctx.workspace_path / "rebuilt.sqlite"
+        rebuild_from_packages(source_dir=ctx.sources_dir, target_db=target_db)
 
         import sqlite3
         conn = sqlite3.connect(str(target_db))
@@ -173,21 +158,11 @@ class TestRebuildIdentity:
             f"properly persisted package."
         )
 
-    def test_rebuild_does_not_restore_decisions_and_revisions(self, tmp_workspace):
+    def test_rebuild_does_not_restore_decisions_and_revisions(self, rebuild_ctx):
         """Rebuild should restore review_decisions and claim_revisions."""
-        import importlib
+        ctx = rebuild_ctx
 
-        import evidence_agent.config
-
-        os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(tmp_workspace.resolve())
-        importlib.reload(evidence_agent.config)
-        import evidence_agent.database.connection
-        importlib.reload(evidence_agent.database.connection)
-
-        from evidence_agent.config import config
-        config.ensure_directories()
-
-        src_dir = config.sources_dir / "SRC-test003"
+        src_dir = ctx.sources_dir / "SRC-test003"
         src_dir.mkdir(parents=True, exist_ok=True)
 
         manifest = {
@@ -222,14 +197,13 @@ class TestRebuildIdentity:
 
         from evidence_agent.database.rebuild import rebuild_from_packages
 
-        target_db = tmp_workspace.resolve() / "rebuilt.sqlite"
-        rebuild_from_packages(source_dir=config.sources_dir, target_db=target_db)
+        target_db = ctx.workspace_path / "rebuilt.sqlite"
+        rebuild_from_packages(source_dir=ctx.sources_dir, target_db=target_db)
 
         import sqlite3
         conn = sqlite3.connect(str(target_db))
         conn.row_factory = sqlite3.Row
 
-        # Check that the code doesn't restore decisions/revisions at all
         dec_count = conn.execute(
             "SELECT COUNT(*) as cnt FROM review_decisions"
         ).fetchone()["cnt"]

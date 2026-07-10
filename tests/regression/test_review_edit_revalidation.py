@@ -10,8 +10,6 @@ Current issues:
 
 import csv
 import json
-import os
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -21,22 +19,8 @@ class TestReviewEditRevalidation:
     """Review apply must thoroughly validate edited fields."""
 
     @pytest.fixture
-    def setup_db(self, tmp_workspace):
+    def setup_db(self, runtime_context):
         """Setup a migrated database with a claim and sections."""
-        import importlib
-        import evidence_agent.config
-
-        os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(tmp_workspace)
-        importlib.reload(evidence_agent.config)
-        import evidence_agent.database.connection
-        importlib.reload(evidence_agent.database.connection)
-
-        from evidence_agent.config import config
-        config.ensure_directories()
-
-        from evidence_agent.database.migrations import migrate
-        migrate()
-
         from evidence_agent.database.connection import get_connection
 
         with get_connection() as conn:
@@ -74,7 +58,7 @@ class TestReviewEditRevalidation:
                 "VALUES ('LOC-test', 'CLM-test', 'SEC-test', 1, 'Figure 2', 'high')"
             )
 
-        return config
+        return runtime_context
 
     def _make_csv(self, tmp_path: Path, rows: list[dict]) -> Path:
         csv_path = tmp_path / "review.csv"

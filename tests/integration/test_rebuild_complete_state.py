@@ -19,22 +19,8 @@ class TestRebuildCompleteState:
     """Rebuild from packages must fully restore database state."""
 
     @pytest.fixture
-    def populated_workspace(self, tmp_workspace):
+    def populated_workspace(self, runtime_context):
         """Setup workspace with source + claims + decisions + revisions."""
-        import importlib
-        import evidence_agent.config
-
-        os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(tmp_workspace)
-        importlib.reload(evidence_agent.config)
-        import evidence_agent.database.connection
-        importlib.reload(evidence_agent.database.connection)
-
-        from evidence_agent.config import config
-        config.ensure_directories()
-
-        from evidence_agent.database.migrations import migrate
-        migrate()
-
         from evidence_agent.database.connection import get_connection
 
         with get_connection() as conn:
@@ -73,8 +59,7 @@ class TestRebuildCompleteState:
                 "'{}', 'tester', '2025-01-01T00:00:00')"
             )
 
-        # Now we need to save these to the package directory
-        src_dir = config.sources_dir / "SRC-rcs1"
+        src_dir = runtime_context.sources_dir / "SRC-rcs1"
         src_dir.mkdir(parents=True, exist_ok=True)
 
         manifest = {
@@ -129,17 +114,17 @@ class TestRebuildCompleteState:
             provenance_dir / "processing_runs.jsonl",
         )
 
-        return config
+        return runtime_context
 
     def test_rebuild_preserves_claim_ids(self, populated_workspace):
         """After rebuild, claim IDs must match originals exactly."""
-        from evidence_agent.config import config
         from evidence_agent.database.rebuild import rebuild_from_packages
 
-        target_db = config.workspace_path / "rebuilt_rcs.sqlite"
+        ctx = populated_workspace
+        target_db = ctx.workspace_path / "rebuilt_rcs.sqlite"
 
         report = rebuild_from_packages(
-            source_dir=config.sources_dir, target_db=target_db
+            source_dir=ctx.sources_dir, target_db=target_db
         )
 
         import sqlite3
@@ -158,11 +143,11 @@ class TestRebuildCompleteState:
 
     def test_rebuild_loses_review_decisions(self, populated_workspace):
         """Rebuild should preserve review_decisions, but current code doesn't import them."""
-        from evidence_agent.config import config
         from evidence_agent.database.rebuild import rebuild_from_packages
 
-        target_db = config.workspace_path / "rebuilt_rcs2.sqlite"
-        rebuild_from_packages(source_dir=config.sources_dir, target_db=target_db)
+        ctx = populated_workspace
+        target_db = ctx.workspace_path / "rebuilt_rcs2.sqlite"
+        rebuild_from_packages(source_dir=ctx.sources_dir, target_db=target_db)
 
         import sqlite3
         conn = sqlite3.connect(str(target_db))
@@ -183,25 +168,21 @@ class TestRebuildCompleteState:
         """Current rebuild mutates EVIDENCE_AGENT_DB_PATH env var,
         which is an isolation bug."""
         from evidence_agent.database.rebuild import rebuild_from_packages
-        from evidence_agent.config import config
 
+        ctx = populated_workspace
         original_db_path = os.environ.get("EVIDENCE_AGENT_DB_PATH", "[not set]")
-        original_db_path = str(config.db_path) if original_db_path == "[not set]" else original_db_path
-        target_db = config.workspace_path / "rebuilt_rcs3.sqlite"
+        original_db_path = str(ctx.db_path) if original_db_path == "[not set]" else original_db_path
+        target_db = ctx.workspace_path / "rebuilt_rcs3.sqlite"
 
-        rebuild_from_packages(source_dir=config.sources_dir, target_db=target_db)
+        rebuild_from_packages(source_dir=ctx.sources_dir, target_db=target_db)
 
-        # After rebuild, the env var or config may have been mutated
-        # Check whether the global config singleton's db_path changed
-        import evidence_agent.config
-        current_db = evidence_agent.config.config.db_path
+        from evidence_agent.runtime import get_current_context
+        current_db = get_current_context().db_path
 
         assert str(current_db) != str(original_db_path) or True, (
             f"NOTE: Current rebuild mutates global env/config. "
             f"Original: {original_db_path}, Current: {current_db}"
         )
-        # This is more of a documentation test — the flaw exists
-        # but we want to record it. Mark as always-passing to document.
         pass
 
 

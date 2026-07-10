@@ -66,6 +66,7 @@ class RuntimeContext:
     # -- Directory setup ------------------------------------------------
 
     def ensure_directories(self) -> None:
+        d: Path
         for d in [
             self._db_path.parent,
             self.sources_dir,
@@ -76,27 +77,6 @@ class RuntimeContext:
         ]:
             d.mkdir(parents=True, exist_ok=True)
 
-    # -- DB connection helpers ------------------------------------------
-
-    def get_connection(self, *, read_only: bool = False):
-        """Get a DB connection using this context's db_path."""
-        from evidence_agent.database.connection import connect
-        return connect(self._db_path, read_only=read_only)
-
-    @contextmanager
-    def transaction(self):
-        """Context manager for explicit transaction."""
-        from evidence_agent.database.connection import connect
-        conn = connect(self._db_path)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-        finally:
-            conn.close()
-
     # -- Factory --------------------------------------------------------
 
     @classmethod
@@ -106,22 +86,29 @@ class RuntimeContext:
         return cls(ws)
 
 
-# Thread-local stack for implicit context (backward compat during migration)
+# ----------------------------------------------------------------------
+# Thread-local stack for implicit context (backward compat)
+# ----------------------------------------------------------------------
 
 _stack: _threading.local = _threading.local()
 
 
 def get_current_context() -> RuntimeContext:
     """Get the current RuntimeContext from the thread-local stack.
-    Falls back to from_env() if no context is set.
 
-    Note: from_env() is called fresh each time to always re-read env vars,
-    so tests that change EVIDENCE_AGENT_WORKSPACE get the new value.
+    Falls back to from_env() if no context is set.
+    from_env() is called fresh each time — no caching.
     """
-    try:
-        return _stack.context  # type: ignore[attr-defined]
-    except AttributeError:
-        return RuntimeContext.from_env()
+    ctx = get_explicit_context()
+    if ctx is not None:
+        return ctx
+    return RuntimeContext.from_env()
+
+
+def get_explicit_context() -> RuntimeContext | None:
+    """Get the explicitly set context, or None if never set."""
+    ctx = getattr(_stack, "context", None)
+    return ctx if isinstance(ctx, RuntimeContext) else None
 
 
 def set_current_context(ctx: RuntimeContext) -> None:
@@ -129,12 +116,23 @@ def set_current_context(ctx: RuntimeContext) -> None:
     _stack.context = ctx
 
 
+def clear_current_context() -> None:
+    """Clear the thread-local context (next call will use from_env)."""
+    try:
+        del _stack.context
+    except AttributeError:
+        pass
+
+
 @contextmanager
 def use_context(ctx: RuntimeContext) -> Iterator[RuntimeContext]:
-    """Temporarily set the current context."""
-    old = get_current_context()
+    """Temporarily set the current context with proper cleanup."""
+    old = get_explicit_context()
     set_current_context(ctx)
     try:
         yield ctx
     finally:
-        set_current_context(old)
+        if old is None:
+            clear_current_context()
+        else:
+            set_current_context(old)

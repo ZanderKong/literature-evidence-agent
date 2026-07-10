@@ -373,7 +373,7 @@ def _sync_fts_remove(conn: Any, claim_id: str) -> None:
     conn.execute("DELETE FROM claim_fts WHERE claim_id = ?", (claim_id,))
 
 
-def _error_report(rows: list[dict], errors: list[str]) -> dict[str, Any]:
+def _error_report(rows: list[dict[str, Any]], errors: list[str]) -> dict[str, Any]:
     return {
         "total": len(rows),
         "approved": 0, "rejected": 0, "edited": 0,

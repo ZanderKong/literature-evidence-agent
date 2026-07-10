@@ -8,7 +8,6 @@ Current implementation:
 """
 
 import json
-import os
 
 import pytest
 
@@ -17,22 +16,8 @@ class TestReviewBatches:
     """Review batches must be created and tracked with stable hashes."""
 
     @pytest.fixture
-    def setup(self, tmp_workspace):
+    def setup(self, runtime_context):
         """Setup workspace with a source, run, and pending claims."""
-        import importlib
-        import evidence_agent.config
-
-        os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(tmp_workspace)
-        importlib.reload(evidence_agent.config)
-        import evidence_agent.database.connection
-        importlib.reload(evidence_agent.database.connection)
-
-        from evidence_agent.config import config
-        config.ensure_directories()
-
-        from evidence_agent.database.migrations import migrate
-        migrate()
-
         from evidence_agent.database.connection import get_connection
 
         with get_connection() as conn:
@@ -79,7 +64,7 @@ class TestReviewBatches:
                 "locator_confidence) VALUES ('LOC-rb2', 'CLM-rb2', 1, 'high')"
             )
 
-        return config
+        return runtime_context
 
     def test_review_export_generates_packet(self, setup):
         """Review export should generate a packet with the correct number of rows."""

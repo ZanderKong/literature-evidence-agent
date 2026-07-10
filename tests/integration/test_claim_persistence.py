@@ -54,8 +54,8 @@ class TestPersistClaims:
             },
         ]
 
-        count = _persist_claims(claims, source_id, None, run_id)
-        assert count == 2  # Only exact/normalised persisted
+        records = _persist_claims(claims, source_id, None, run_id)
+        assert len(records) == 2  # Only exact/normalised persisted
 
         # Verify in database
         with get_connection(read_only=True) as conn:
@@ -80,5 +80,10 @@ class TestPersistClaims:
     def test_empty_claims(self, migrated_workspace):
         pdf_path = FIXTURES_DIR / "sample_article.pdf"
         result = import_pdf(pdf_path)
-        count = _persist_claims([], result["source_id"], None, "RUN-EMPTY")
-        assert count == 0
+        records = _persist_claims([], result["source_id"], None, "RUN-EMPTY")
+        assert len(records) == 0
+        # Also verify each record has the expected keys
+        for rec in records:
+            assert "claim_id" in rec
+            assert "locator_id" in rec
+            assert "source_quote" in rec

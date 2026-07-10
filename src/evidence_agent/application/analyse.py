@@ -237,13 +237,15 @@ def analyse_source(
                 "(text may have no extractable claims)"
             )
 
-        # 12. Persist validated claims to database
-        persisted_count = _persist_claims(
+        # 12. Persist validated claims to database (returns full records)
+        persisted_records = _persist_claims(
             validated, source_id, task_id, run_id
         )
+        persisted_count = len(persisted_records)
 
-        # Save persisted snapshot
-        _save_jsonl(validated, analysis_dir / "claims.persisted.jsonl")
+        # Save persisted snapshot with real IDs
+        run_analysis_dir = analysis_dir / "runs" / run_id
+        _atomic_save_jsonl(persisted_records, run_analysis_dir / "claims.persisted.jsonl")
 
         # 13. Save provenance
         provenance_dir = package_dir / "provenance"
@@ -254,7 +256,12 @@ def analyse_source(
             "source_id": source_id,
             "module_name": "analyse",
             "model_name": provider.model_name,
+            "model_mode": "extraction",
             "prompt_version": provider.prompt_version,
+            "parser_name": parser_name,
+            "parser_version": parser_version,
+            "code_commit": code_commit,
+            "artifact_schema_version": "1.0",
             "status": "completed",
             "started_at": now,
             "completed_at": now_iso(),
@@ -266,7 +273,7 @@ def analyse_source(
             "analysis_depth": analysis_depth,
             "warnings": warnings,
         }
-        _save_jsonl([run_record], provenance_dir / "processing_runs.jsonl")
+        _atomic_save_jsonl([run_record], provenance_dir / "processing_runs.jsonl")
 
         # 14. Update manifest with analysis info
         manifest_path = package_dir / "manifest.json"
@@ -389,12 +396,15 @@ def _persist_claims(
     source_id: str,
     task_id: str | None,
     run_id: str,
-) -> int:
-    """Persist validated claims to database in a single transaction."""
+) -> list[dict[str, Any]]:
+    """Persist validated claims to database in a single transaction.
+    
+    Returns list of persisted claim records with DB IDs.
+    """
     if not claims:
-        return 0
+        return []
 
-    count = 0
+    persisted: list[dict[str, Any]] = []
     with transaction() as conn:
         for claim in claims:
             match_status = claim.get("_quote_match_status", "not_found")
@@ -447,9 +457,32 @@ def _persist_claims(
                 ),
             )
 
-            count += 1
+            persisted.append({
+                "claim_id": claim_id,
+                "locator_id": locator_id,
+                "source_id": source_id,
+                "task_id": task_id,
+                "run_id": run_id,
+                "claim_type": claim.get("claim_type", ""),
+                "source_quote": claim.get("source_quote", ""),
+                "faithful_paraphrase": claim.get("faithful_paraphrase", ""),
+                "evidence_basis_description": claim.get("evidence_basis_description", ""),
+                "scope_description": claim.get("scope_description"),
+                "author_hedging": claim.get("author_hedging"),
+                "quote_match_status": match_status,
+                "record_review_status": "pending",
+                "scientific_verification_status": "unverified",
+                "origin_scope": "external",
+                "page": page,
+                "figure_label": locator.get("figure_label"),
+                "table_label": locator.get("table_label"),
+                "locator_confidence": "high" if match_status == "exact" else "medium",
+                "created_at": now,
+                "updated_at": now,
+                "schema_version": "1.0",
+            })
 
-    return count
+    return persisted
 
 
 def _complete_run(
@@ -536,3 +569,17 @@ def _save_jsonl(items: list[dict[str, Any]], path: Path) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for item in items:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def _atomic_save_jsonl(items: list[dict[str, Any]], path: Path) -> None:
+    """Atomically save JSONL using temp file + rename."""
+    import os as _os
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        for item in items:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+    f.flush()
+    _os.fsync(f.fileno())
+    _os.replace(str(tmp), str(path))

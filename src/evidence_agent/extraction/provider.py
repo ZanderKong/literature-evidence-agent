@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from evidence_agent.extraction.response_parser import parse_claim_response
+
 # ── Data types ─────────────────────────────────────────
 
 @dataclass
@@ -92,7 +94,6 @@ class MockProvider:
         )
         input_hash = _compute_hash(input_content)
 
-        # If section is very short/empty, return no claims
         if len(request.section_text.strip()) < 20:
             return ExtractionResponse(
                 claims=[],
@@ -105,7 +106,7 @@ class MockProvider:
 
         output = json.dumps(self._fixed_claims, ensure_ascii=False)
         return ExtractionResponse(
-            claims=self._fixed_claims,
+            claims=list(self._fixed_claims),
             raw_response=output,
             model_name=self.model_name,
             prompt_version=self.prompt_version,
@@ -115,7 +116,6 @@ class MockProvider:
 
     @staticmethod
     def _default_claims() -> list[dict[str, Any]]:
-        """Default mock claims for testing."""
         return [
             {
                 "claim_type": "reported_result",
@@ -130,13 +130,7 @@ class MockProvider:
                     "figure_label": "Figure 1",
                     "table_label": None,
                 },
-                "entities": [
-                    {
-                        "entity_type": "property",
-                        "display_name": "solubility",
-                        "role": "property",
-                    }
-                ],
+                "entities": [],
             },
             {
                 "claim_type": "author_interpretation",
@@ -216,21 +210,45 @@ class DeepSeekProvider:
 
         for attempt in range(1, self._max_retries + 1):
             try:
-                result = self._call_api(request)
-                output_hash = _compute_hash(result)
+                raw = self._call_api(request)
+                parsed = parse_claim_response(raw)
+                output_hash = _compute_hash(raw)
+
+                if parsed["status"] == "invalid_json":
+                    if attempt < self._max_retries:
+                        wait = 2**attempt
+                        time.sleep(wait)
+                        continue
+                    return ExtractionResponse(
+                        error=(
+                            f"Invalid JSON after {self._max_retries} "
+                            f"attempts: {parsed['errors']}"
+                        ),
+                        raw_response=raw,
+                        model_name=self._model,
+                        prompt_version=self._prompt_version,
+                        input_hash=input_hash,
+                        output_hash=output_hash,
+                        retries=attempt,
+                    )
+
                 return ExtractionResponse(
-                    claims=[],
-                    raw_response=result,
+                    claims=parsed["claims"],
+                    raw_response=raw,
                     model_name=self._model,
                     prompt_version=self._prompt_version,
                     input_hash=input_hash,
                     output_hash=output_hash,
                     retries=attempt - 1,
+                    error=(
+                        parsed["errors"][0] if parsed["errors"] else None
+                    ),
                 )
+
             except Exception as e:
                 last_error = str(e)
                 if attempt < self._max_retries:
-                    wait = 2**attempt  # Exponential backoff
+                    wait = 2**attempt
                     time.sleep(wait)
 
         return ExtractionResponse(
@@ -254,9 +272,9 @@ class DeepSeekProvider:
                     {"role": "system", "content": self._get_system_prompt()},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.1,
                 "max_tokens": 8192,
                 "response_format": {"type": "json_object"},
+                "reasoning_effort": "max",
             }
         ).encode("utf-8")
 
@@ -269,7 +287,7 @@ class DeepSeekProvider:
             },
         )
 
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             body: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
             content: str = body["choices"][0]["message"]["content"]
             return content
@@ -280,7 +298,7 @@ class DeepSeekProvider:
             "Extract claims exactly as stated by the authors. "
             "Preserve hedging language (suggests, may, possibly). "
             "Distinguish observations from interpretations. "
-            "Always return valid JSON."
+            "Always return valid JSON with a 'claims' array."
         )
 
     def _build_prompt(self, request: ExtractionRequest) -> str:

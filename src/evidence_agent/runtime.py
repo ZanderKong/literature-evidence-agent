@@ -114,13 +114,14 @@ _stack: _threading.local = _threading.local()
 def get_current_context() -> RuntimeContext:
     """Get the current RuntimeContext from the thread-local stack.
     Falls back to from_env() if no context is set.
+
+    Note: from_env() is called fresh each time to always re-read env vars,
+    so tests that change EVIDENCE_AGENT_WORKSPACE get the new value.
     """
     try:
         return _stack.context  # type: ignore[attr-defined]
     except AttributeError:
-        ctx = RuntimeContext.from_env()
-        _stack.context = ctx
-        return ctx
+        return RuntimeContext.from_env()
 
 
 def set_current_context(ctx: RuntimeContext) -> None:

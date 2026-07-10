@@ -12,18 +12,12 @@ def _reload_config(workspace: Path) -> None:
     """Set workspace env var and reload config module."""
     workspace = workspace.resolve()
     os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(workspace)
-
-    # Reload config so the singleton picks up the new env var
     import evidence_agent.config
     importlib.reload(evidence_agent.config)
-
-    # Also reload modules that import config at module level
     import evidence_agent.database.connection
     importlib.reload(evidence_agent.database.connection)
-
     import evidence_agent.ingest.files
     importlib.reload(evidence_agent.ingest.files)
-
     import evidence_agent.parsers.pdf
     importlib.reload(evidence_agent.parsers.pdf)
 
@@ -31,10 +25,8 @@ def _reload_config(workspace: Path) -> None:
 def _cleanup_config() -> None:
     """Remove env override and reload."""
     os.environ.pop("EVIDENCE_AGENT_WORKSPACE", None)
-
     import evidence_agent.config
     importlib.reload(evidence_agent.config)
-
     import evidence_agent.database.connection
     importlib.reload(evidence_agent.database.connection)
 
@@ -49,11 +41,7 @@ def tmp_workspace() -> Path:
 
 @pytest.fixture
 def migrated_workspace() -> Path:
-    """Create a temp workspace with a migrated database.
-
-    Sets EVIDENCE_AGENT_WORKSPACE env var so that all config paths
-    point to the temp workspace.
-    """
+    """Create a temp workspace with a migrated database."""
     with tempfile.TemporaryDirectory() as tmpdir:
         workspace = Path(tmpdir)
         _reload_config(workspace)

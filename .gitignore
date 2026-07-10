@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+.env.local
+
+# Workspace data
+workspace/external_evidence/evidence.sqlite
+workspace/external_evidence/sources/
+workspace/external_evidence/review/
+workspace/external_evidence/logs/
+workspace/external_evidence/backups/
+workspace/external_evidence/exports/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+*.coverage.*
+
+# Mypy
+.mypy_cache/

@@ -1,11 +1,17 @@
-"""Review packet generation — reads from database by run_id."""
+"""Review packet generation — reads from database by run_id.
+
+Creates review_batches and review_batch_rows in the database
+for tracking and idempotency.
+"""
 
 import csv
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 from evidence_agent.database.connection import get_connection
+from evidence_agent.ids import generate_batch_id, generate_row_id, now_iso
 
 
 def generate_review_packet(
@@ -44,10 +50,51 @@ def generate_review_packet(
             f"NO_PENDING_CLAIMS: No pending claims for run {run_id}"
         )
 
+    # Compute canonical row hashes and packet hash
+    canonical_rows = []
+    row_hasher = hashlib.sha256()
+    for seq, c in enumerate(claims, 1):
+        row_input = json.dumps(
+            {k: c.get(k, "") for k in
+             ["claim_id", "claim_type", "source_quote", "faithful_paraphrase",
+              "evidence_basis_description", "page", "figure_label", "table_label"]},
+            sort_keys=True,
+        )
+        row_hash = hashlib.sha256(row_input.encode()).hexdigest()
+        row_hasher.update(row_hash.encode())
+        canonical_rows.append({
+            "claim_id": c["claim_id"],
+            "row_sequence": seq,
+            "row_input_sha256": row_hash,
+        })
+
+    packet_sha256 = row_hasher.hexdigest()
+
+    # Create review batch in database
+    batch_id = ""
+    with get_connection() as conn:
+        batch_id = generate_batch_id()
+        conn.execute(
+            "INSERT INTO review_batches (review_batch_id, run_id, source_id, "
+            "packet_sha256, status, exported_at) VALUES (?, ?, ?, ?, 'exported', ?)",
+            (batch_id, run_id, claims[0]["source_id"], packet_sha256, now_iso()),
+        )
+        for row_rec in canonical_rows:
+            conn.execute(
+                "INSERT INTO review_batch_rows (review_row_id, review_batch_id, "
+                "claim_id, row_sequence, row_input_sha256) VALUES (?, ?, ?, ?, ?)",
+                (generate_row_id(), batch_id, row_rec["claim_id"],
+                 row_rec["row_sequence"], row_rec["row_input_sha256"]),
+            )
+
     source_title = (claims[0].get("source_title") or "Untitled")
+    source_id = claims[0].get("source_id", "")
 
     # Generate outputs
     paths: dict[str, str] = {}
+    paths["batch_id"] = batch_id
+    paths["packet_sha256"] = packet_sha256
+    paths["row_count"] = str(len(canonical_rows))
 
     # CSV
     csv_path = output_dir / "claims_for_review.csv"

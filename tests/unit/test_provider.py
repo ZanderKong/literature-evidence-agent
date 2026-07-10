@@ -32,7 +32,7 @@ class TestMockProvider:
         )
         response = provider.extract_claims(request)
 
-        assert len(response.claims) == 4  # Updated: 4 default claims for real PDF
+        assert len(response.claims) >= 1  # Matched by quote-words in section text
         assert response.error is None
         assert response.model_name == "mock"
         assert response.prompt_version == "claim_extraction_v1"
@@ -59,7 +59,7 @@ class TestMockProvider:
 
     def test_repeatable_output(self):
         """Mock provider should give the same output for the same input."""
-        provider = MockProvider()
+        provider = MockProvider(check_quotes=False)
         request = ExtractionRequest(
             task_description="Extract all claims",
             section_text="Some meaningful text about solubility and complexes.",
@@ -85,7 +85,7 @@ class TestMockProvider:
                 "entities": [],
             }
         ]
-        provider = MockProvider(fixed_claims=custom)
+        provider = MockProvider(fixed_claims=custom, check_quotes=False)
         response = provider.extract_claims(
             ExtractionRequest(task_description="Test", section_text="Some text" * 10)
         )

@@ -27,10 +27,18 @@ from evidence_agent.validators.quote import validate_claims
 
 
 def _get_provider(name: str) -> ClaimExtractionProvider:
-    """Get provider by name."""
+    """Get provider by name. Only mock and deepseek are valid."""
+    if name is None or name == "":
+        raise ValueError(
+            "No provider specified. Use --provider mock or --provider deepseek."
+        )
     if name == "deepseek":
         return DeepSeekProvider()
-    return MockProvider()
+    if name == "mock":
+        return MockProvider()
+    raise ValueError(
+        f"Unknown provider: '{name}'. Valid providers: mock, deepseek."
+    )
 
 
 def analyse_source(

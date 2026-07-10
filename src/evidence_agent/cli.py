@@ -162,42 +162,6 @@ def reset() -> None:
         typer.echo(f"Reset failed: {e}", err=True)
         raise typer.Exit(code=3) from e
 
-
-
-@db_app.command()
-def rebuild() -> None:
-    """Drop all tables and re-run migrations (DESTRUCTIVE)."""
-    from evidence_agent.database.migrations import rebuild as run_rebuild
-    typer.echo("WARNING: This will drop all existing data!")
-    typer.echo("Continue? [y/N] ", nl=False)
-    answer = input().strip().lower()
-    if answer not in ("y", "yes"):
-        typer.echo("Aborted.")
-        raise typer.Exit(code=0)
-    try:
-        applied = run_rebuild()
-        typer.echo(f"Rebuilt: {len(applied)} migration(s) applied")
-    except Exception as e:
-        typer.echo(f"Rebuild failed: {e}", err=True)
-        raise typer.Exit(code=3) from e
-    """Rebuild database from source packages (destructive, re-runs all migrations)."""
-    from evidence_agent.database.migrations import rebuild as run_rebuild
-
-    typer.echo("WARNING: This will drop all existing data!")
-    typer.echo("Continue? [y/N] ", nl=False)
-    answer = input().strip().lower()
-    if answer not in ("y", "yes"):
-        typer.echo("Aborted.")
-        raise typer.Exit(code=0)
-
-    try:
-        applied = run_rebuild()
-        typer.echo(f"Rebuilt: {len(applied)} migration(s) applied")
-    except Exception as e:
-        typer.echo(f"Rebuild failed: {e}", err=True)
-        raise typer.Exit(code=3) from e
-
-
 @app.command()
 def ingest(file: str) -> None:
     """Import a local PDF as an external source."""
@@ -354,7 +318,7 @@ def export_source(
 def analyse(
     source_id: str,
     task: str = typer.Option(None, "--task", help="Task ID to associate"),
-    provider: str = typer.Option("mock", "--provider", help="Provider: mock|deepseek"),
+    provider: str = typer.Option(None, "--provider", help="Provider: mock|deepseek"),
 ) -> None:
     """Run full analysis pipeline on a source."""
     from evidence_agent.application.analyse import analyse_source

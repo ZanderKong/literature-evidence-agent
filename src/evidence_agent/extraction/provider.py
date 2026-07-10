@@ -64,6 +64,19 @@ def _compute_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _quote_appears_in(quote: str, text_lower: str) -> bool:
+    """Check if a quote appears in the text (case-insensitive)."""
+    if not quote or not quote.strip():
+        return False
+    words = [w for w in quote.lower().strip().split() if len(w) > 3]
+    if len(words) < 2:
+        return False
+    matched = sum(1 for w in words if w in text_lower)
+    if len(words) <= 5:
+        return matched >= len(words) * 0.5
+    return matched >= max(len(words) * 0.45, 3)
+
+
 # ── Mock Provider ──────────────────────────────────────
 
 class MockProvider:
@@ -72,8 +85,9 @@ class MockProvider:
     No API key required. Used by default in tests.
     """
 
-    def __init__(self, fixed_claims: list[dict[str, Any]] | None = None) -> None:
+    def __init__(self, fixed_claims: list[dict[str, Any]] | None = None, *, check_quotes: bool = True) -> None:
         self._fixed_claims = fixed_claims or self._default_claims()
+        self._check_quotes = check_quotes
 
     @property
     def model_name(self) -> str:
@@ -104,9 +118,17 @@ class MockProvider:
                 output_hash=_compute_hash("[]"),
             )
 
-        output = json.dumps(self._fixed_claims, ensure_ascii=False)
+        if self._check_quotes:
+            section_lower = request.section_text.lower()
+            matching = [
+                c for c in self._fixed_claims
+                if _quote_appears_in(c.get("source_quote", ""), section_lower)
+            ]
+        else:
+            matching = list(self._fixed_claims)
+        output = json.dumps(matching, ensure_ascii=False)
         return ExtractionResponse(
-            claims=list(self._fixed_claims),
+            claims=list(matching),
             raw_response=output,
             model_name=self.model_name,
             prompt_version=self.prompt_version,

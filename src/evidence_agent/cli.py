@@ -127,7 +127,59 @@ def check() -> None:
 
 
 @db_app.command()
+def rebuild_from_packages(
+    source: str = typer.Option(None, "--source", help="Sources directory"),
+    target: str = typer.Option(None, "--target", help="Target database path"),
+) -> None:
+    """Rebuild database from all source packages."""
+    from pathlib import Path as _Path
+
+    from evidence_agent.database.rebuild import rebuild_from_packages
+
+    src_dir = _Path(source) if source else None
+    tgt = _Path(target) if target else None
+    try:
+        report = rebuild_from_packages(source_dir=src_dir, target_db=tgt)
+        typer.echo(json.dumps(report, indent=2, default=str))
+    except Exception as e:
+        typer.echo(f"Rebuild failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
+
+
+@db_app.command()
+def reset() -> None:
+    """Drop all tables and re-run migrations (DESTRUCTIVE)."""
+    from evidence_agent.database.migrations import rebuild as run_rebuild
+    typer.echo("WARNING: Drops all data!")
+    ans = input("Continue? [y/N] ").strip().lower()
+    if ans not in ("y", "yes"):
+        typer.echo("Aborted.")
+        raise typer.Exit(code=0)
+    try:
+        applied = run_rebuild()
+        typer.echo(f"Reset: {len(applied)} migrations applied")
+    except Exception as e:
+        typer.echo(f"Reset failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
+
+
+
+@db_app.command()
 def rebuild() -> None:
+    """Drop all tables and re-run migrations (DESTRUCTIVE)."""
+    from evidence_agent.database.migrations import rebuild as run_rebuild
+    typer.echo("WARNING: This will drop all existing data!")
+    typer.echo("Continue? [y/N] ", nl=False)
+    answer = input().strip().lower()
+    if answer not in ("y", "yes"):
+        typer.echo("Aborted.")
+        raise typer.Exit(code=0)
+    try:
+        applied = run_rebuild()
+        typer.echo(f"Rebuilt: {len(applied)} migration(s) applied")
+    except Exception as e:
+        typer.echo(f"Rebuild failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
     """Rebuild database from source packages (destructive, re-runs all migrations)."""
     from evidence_agent.database.migrations import rebuild as run_rebuild
 

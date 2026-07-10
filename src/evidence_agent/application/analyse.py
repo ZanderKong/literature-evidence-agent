@@ -128,7 +128,48 @@ def analyse_source(
         # Save persisted snapshot
         _save_jsonl(validated, analysis_dir / "claims.persisted.jsonl")
 
-        # 7. Complete run
+        # 7. Save provenance
+        provenance_dir = package_dir / "provenance"
+        provenance_dir.mkdir(exist_ok=True)
+        run_record = {
+            "run_id": run_id,
+            "task_id": task_id,
+            "source_id": source_id,
+            "module_name": "analyse",
+            "model_name": provider.model_name,
+            "prompt_version": provider.prompt_version,
+            "status": "completed",
+            "started_at": now,
+            "completed_at": now_iso(),
+            "candidate_claims": extraction_report["candidate_claims"],
+            "validated_claims": len(validated),
+            "persisted_claims": persisted_count,
+        }
+        _save_jsonl([run_record], provenance_dir / "processing_runs.jsonl")
+
+        # 8. Update manifest with analysis info
+        manifest_path = package_dir / "manifest.json"
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text())
+            manifest["last_analysis"] = {
+                "run_id": run_id,
+                "completed_at": run_record["completed_at"],
+                "validated_claims": len(validated),
+            }
+            manifest["artifacts"] = [
+                "parsed/pages.jsonl",
+                "parsed/sections.jsonl",
+                "analysis/claims.raw.jsonl",
+                "analysis/claims.validated.jsonl",
+                "analysis/claims.persisted.jsonl",
+                "analysis/unresolved_items.jsonl",
+                "provenance/processing_runs.jsonl",
+            ]
+            manifest_path.write_text(
+                json.dumps(manifest, indent=2, ensure_ascii=False)
+            )
+
+        # 9. Complete run
         _complete_run(run_id)
 
         return {

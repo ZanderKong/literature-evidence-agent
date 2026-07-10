@@ -12,6 +12,7 @@ from typing import Any
 
 from evidence_agent.database.connection import get_connection
 from evidence_agent.ids import generate_batch_id, generate_row_id, now_iso
+from evidence_agent.runtime import get_current_context
 
 
 def generate_review_packet(
@@ -24,10 +25,10 @@ def generate_review_packet(
 
     Returns dict mapping output type to file path.
     """
-    from evidence_agent.config import config
+    runtime = get_current_context()
 
     if output_dir is None:
-        output_dir = config.review_dir / run_id
+        output_dir = runtime.review_dir / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Read claims from DB
@@ -88,7 +89,7 @@ def generate_review_packet(
             )
 
     source_title = (claims[0].get("source_title") or "Untitled")
-    source_id = claims[0].get("source_id", "")
+    claims[0].get("source_id", "")
 
     # Generate outputs
     paths: dict[str, str] = {}

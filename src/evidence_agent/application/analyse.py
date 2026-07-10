@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from evidence_agent.config import config
 from evidence_agent.database.connection import get_connection, transaction
 from evidence_agent.extraction.claims import extract_claims_from_source
 from evidence_agent.extraction.provider import (
@@ -23,6 +22,7 @@ from evidence_agent.ids import (
     now_iso,
 )
 from evidence_agent.parsers.pdf import parse_pdf
+from evidence_agent.runtime import RuntimeContext, get_current_context
 from evidence_agent.validators.quote import validate_claims
 
 
@@ -63,6 +63,7 @@ def analyse_source(
     source_id: str,
     task_id: str | None = None,
     provider_name: str = "mock",
+    ctx: RuntimeContext | None = None,
 ) -> dict[str, Any]:
     """Run the full analysis pipeline on a source.
 
@@ -73,6 +74,8 @@ def analyse_source(
 
     Returns dict with analysis results.
     """
+    runtime = ctx or get_current_context()
+
     # 1. Validate source exists in DB
     with get_connection(read_only=True) as conn:
         src = conn.execute(
@@ -81,7 +84,7 @@ def analyse_source(
         if not src:
             raise ValueError(f"Source not found in database: {source_id}")
 
-    package_dir = config.sources_dir / source_id
+    package_dir = runtime.sources_dir / source_id
     if not package_dir.exists():
         raise ValueError(
             f"Source package directory not found: {package_dir}"
@@ -398,7 +401,7 @@ def _persist_claims(
     run_id: str,
 ) -> list[dict[str, Any]]:
     """Persist validated claims to database in a single transaction.
-    
+
     Returns list of persisted claim records with DB IDs.
     """
     if not claims:
@@ -580,6 +583,6 @@ def _atomic_save_jsonl(items: list[dict[str, Any]], path: Path) -> None:
     with open(tmp, "w", encoding="utf-8") as f:
         for item in items:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
-    f.flush()
-    _os.fsync(f.fileno())
+        f.flush()
+        _os.fsync(f.fileno())
     _os.replace(str(tmp), str(path))

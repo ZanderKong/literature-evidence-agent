@@ -4,13 +4,13 @@ Each check performs actual work in a temporary workspace, not just
 counting rows or checking table existence.
 """
 
-import json
-import os
 import shutil
 import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+from evidence_agent.runtime import RuntimeContext, set_current_context
 
 
 class VerifyReport:
@@ -18,7 +18,10 @@ class VerifyReport:
     def __init__(self) -> None:
         self.checks: list[dict[str, Any]] = []
 
-    def add(self, name: str, passed: bool, duration_ms: int, evidence: str = "", reason: str = "") -> None:
+    def add(
+        self, name: str, passed: bool,
+        duration_ms: int, evidence: str = "", reason: str = "",
+    ) -> None:
         self.checks.append({
             "name": name,
             "status": "PASS" if passed else "FAIL",
@@ -44,13 +47,7 @@ def run_round1_verification(
     pdf_path: Path | None = None,
     workspace: Path | None = None,
 ) -> VerifyReport:
-    """Run all Round 1 verification checks in an isolated workspace.
-
-    Args:
-        pdf_path: Path to a real PDF for ingest/analysis tests.
-                  If not provided, uses tests/fixtures/real_scientific_article_en.pdf
-        workspace: Optional pre-existing workspace. Creates temp if not provided.
-    """
+    """Run all Round 1 verification checks in an isolated workspace."""
     report = VerifyReport()
 
     # Setup isolated workspace
@@ -61,19 +58,17 @@ def run_round1_verification(
         ws = workspace.resolve()
         ws.mkdir(parents=True, exist_ok=True)
 
-    os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(ws)
+    ctx = RuntimeContext(str(ws))
+    set_current_context(ctx)
+    ctx.ensure_directories()
 
-    # Reload config
-    import importlib
-    import evidence_agent.config
-    import evidence_agent.database.connection
-    importlib.reload(evidence_agent.config)
-    importlib.reload(evidence_agent.database.connection)
+    from evidence_agent.database.migrations import migrate
+    migrate()
 
-    from evidence_agent.config import config
-    config.ensure_directories()
-
-    test_pdf = pdf_path or Path(__file__).resolve().parent.parent.parent.parent / "tests" / "fixtures" / "real_scientific_article_en.pdf"
+    test_pdf = pdf_path or (
+        Path(__file__).resolve().parent.parent.parent.parent
+        / "tests" / "fixtures" / "real_scientific_article_en.pdf"
+    )
 
     try:
         # Check 1: database integrity
@@ -109,7 +104,8 @@ def _check_1_db_integrity(report: VerifyReport) -> None:
     """Create fresh DB, migrate, check integrity."""
     t0 = time.time()
     try:
-        from evidence_agent.database.migrations import migrate, check as db_check
+        from evidence_agent.database.migrations import check as db_check
+        from evidence_agent.database.migrations import migrate
 
         migrate()
         results = db_check()
@@ -129,8 +125,8 @@ def _check_2_ingest_idempotency(report: VerifyReport, pdf_path: Path) -> None:
     """Ingest same PDF twice, verify dedup."""
     t0 = time.time()
     try:
-        from evidence_agent.ingest.files import import_pdf
         from evidence_agent.database.connection import get_connection
+        from evidence_agent.ingest.files import import_pdf
 
         # First import
         r1 = import_pdf(pdf_path)
@@ -159,9 +155,9 @@ def _check_3_quote_traceability(report: VerifyReport, pdf_path: Path) -> None:
     """Run analyse, verify claims > 0 and quotes traceable."""
     t0 = time.time()
     try:
-        from evidence_agent.ingest.files import import_pdf
         from evidence_agent.application.analyse import analyse_source
         from evidence_agent.database.connection import get_connection
+        from evidence_agent.ingest.files import import_pdf
 
         r = import_pdf(pdf_path)
         source_id = r["source_id"]
@@ -170,7 +166,7 @@ def _check_3_quote_traceability(report: VerifyReport, pdf_path: Path) -> None:
         claim_count = analysis.get("persisted_claims", 0)
         if claim_count < 1:
             report.add("quote_traceability", False, int((time.time() - t0) * 1000),
-                       reason=f"0 persisted claims (needed >= 1)")
+                       reason="0 persisted claims (needed >= 1)")
             return
 
         # Verify each claim's quote appears in source sections
@@ -206,11 +202,11 @@ def _check_4_review_workflow(report: VerifyReport, pdf_path: Path) -> None:
     """Export review packet, apply approve/edits/reject, verify."""
     t0 = time.time()
     try:
-        from evidence_agent.ingest.files import import_pdf
         from evidence_agent.application.analyse import analyse_source
-        from evidence_agent.review.packet import generate_review_packet
-        from evidence_agent.review.decisions import apply_review_csv
         from evidence_agent.database.connection import get_connection
+        from evidence_agent.ingest.files import import_pdf
+        from evidence_agent.review.decisions import apply_review_csv
+        from evidence_agent.review.packet import generate_review_packet
 
         r = import_pdf(pdf_path)
         analysis = analyse_source(r["source_id"], provider_name="mock")
@@ -279,7 +275,6 @@ def _check_5_fts_search(report: VerifyReport, pdf_path: Path) -> None:
     t0 = time.time()
     try:
         from evidence_agent.search.fts import search_claims
-        from evidence_agent.database.connection import get_connection
 
         approved = search_claims("solubility", limit=50)
         approved_count = len(approved)
@@ -303,7 +298,6 @@ def _check_6_database_rebuild(report: VerifyReport) -> None:
     t0 = time.time()
     try:
         from evidence_agent.database.migrations import check as db_check
-        from evidence_agent.database.rebuild import rebuild_from_packages
 
         results = db_check()
         if results.get("version", 0) < 4:

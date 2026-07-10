@@ -17,8 +17,8 @@ Prefixes:
 """
 
 import uuid
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 
 def _full_uid() -> str:
@@ -105,4 +105,4 @@ def generate_entity_id() -> str:
 
 def now_iso() -> str:
     """Current UTC time as ISO 8601 string."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()

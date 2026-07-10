@@ -14,11 +14,12 @@ app = typer.Typer(
 @app.command()
 def init() -> None:
     """Initialize the workspace directory structure."""
-    from evidence_agent.config import config
+    from evidence_agent.runtime import get_current_context
 
-    config.ensure_directories()
-    typer.echo(f"Workspace initialized at: {config.workspace_path}")
-    typer.echo(f"Database path: {config.db_path}")
+    ctx = get_current_context()
+    ctx.ensure_directories()
+    typer.echo(f"Workspace initialized at: {ctx.workspace_path}")
+    typer.echo(f"Database path: {ctx.db_path}")
 
 
 @app.command()
@@ -93,10 +94,11 @@ app.add_typer(db_app, name="db")
 @db_app.command()
 def migrate() -> None:
     """Run database migrations."""
-    from evidence_agent.config import config
     from evidence_agent.database.migrations import migrate as run_migrate
+    from evidence_agent.runtime import get_current_context
 
-    config.ensure_directories()
+    ctx = get_current_context()
+    ctx.ensure_directories()
 
     try:
         applied = run_migrate()
@@ -162,6 +164,7 @@ def reset() -> None:
         typer.echo(f"Reset failed: {e}", err=True)
         raise typer.Exit(code=3) from e
 
+
 @app.command()
 def ingest(file: str) -> None:
     """Import a local PDF as an external source."""
@@ -188,10 +191,11 @@ def ingest(file: str) -> None:
 @app.command()
 def parse(source_id: str) -> None:
     """Parse an imported PDF source."""
-    from evidence_agent.config import config
     from evidence_agent.parsers.pdf import parse_pdf
+    from evidence_agent.runtime import get_current_context
 
-    package_dir = config.sources_dir / source_id
+    ctx = get_current_context()
+    package_dir = ctx.sources_dir / source_id
 
     if not package_dir.exists():
         typer.echo(f"Source not found: {source_id}", err=True)
@@ -286,13 +290,14 @@ def export_source(
     include_pending: bool = False,
 ) -> None:
     """Export a source's approved claims."""
-    from evidence_agent.config import config
     from evidence_agent.exports.markdown import (
         export_source_jsonl,
         export_source_markdown,
     )
+    from evidence_agent.runtime import get_current_context
 
-    exports_dir = config.exports_dir
+    ctx = get_current_context()
+    exports_dir = ctx.exports_dir
     exports_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -408,9 +413,15 @@ def _verify_round1() -> None:
         evidence = check.get("evidence", "")
         reason = check.get("reason", "")
         if status == "PASS":
-            typer.echo(f"{name}=PASS duration_ms={check['duration_ms']} evidence={evidence}")
+            typer.echo(
+                f"{name}=PASS duration_ms={check['duration_ms']} "
+                f"evidence={evidence}"
+            )
         else:
-            typer.echo(f"{name}=FAIL duration_ms={check['duration_ms']} reason={reason} evidence={evidence}")
+            typer.echo(
+                f"{name}=FAIL duration_ms={check['duration_ms']} "
+                f"reason={reason} evidence={evidence}"
+            )
 
     if report.all_pass:
         typer.echo("ROUND1_VERIFICATION=PASS")
@@ -418,7 +429,6 @@ def _verify_round1() -> None:
     else:
         typer.echo("ROUND1_VERIFICATION=FAIL")
         raise typer.Exit(code=7)
-
 
 
 if __name__ == "__main__":

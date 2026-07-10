@@ -1,7 +1,7 @@
 """Application layer — unified analyse workflow.
 
 Orchestrates the full analysis pipeline:
-    parse → extract → validate → persist → save artifacts
+    validate → parse → extract → validate → persist → save artifacts
 """
 
 import json
@@ -55,14 +55,57 @@ def analyse_source(
 
     Returns dict with analysis results.
     """
+    # 1. Validate source exists in DB
+    with get_connection(read_only=True) as conn:
+        src = conn.execute(
+            "SELECT source_id FROM sources WHERE source_id = ?", (source_id,)
+        ).fetchone()
+        if not src:
+            raise ValueError(f"Source not found in database: {source_id}")
+
     package_dir = config.sources_dir / source_id
     if not package_dir.exists():
-        raise ValueError(f"Source not found: {source_id}")
+        raise ValueError(
+            f"Source package directory not found: {package_dir}"
+        )
 
-    # 1. Create processing run
+    # 2. Validate source asset exists
+    orig_pdf = package_dir / "original" / "main.pdf"
+    if not orig_pdf.exists():
+        raise ValueError(
+            f"Source asset (main.pdf) not found in package: {orig_pdf}"
+        )
+
+    # 3. Validate task if provided
+    analysis_depth = "source_complete"
+    task_desc = "Extract all author claims from the scientific text."
+    if task_id:
+        from evidence_agent.database.repositories import get_task
+
+        t = get_task(task_id)
+        if t is None:
+            raise ValueError(f"Task not found: {task_id}")
+        task_desc = t.get("user_request", task_desc)
+        analysis_depth = t.get("analysis_depth", "source_complete")
+
+        # Validate task mode is compatible
+        task_mode = t.get("task_mode", "")
+        if task_mode not in ("analyse_uploaded", "source_complete_analysis"):
+            raise ValueError(
+                f"Task mode '{task_mode}' is not compatible with analysis. "
+                f"Use analyse_uploaded or source_complete_analysis."
+            )
+
+        # Update task status to running
+        from evidence_agent.database.repositories import update_task_status
+        update_task_status(task_id, "running")
+
+    # 4. Get provider (validates name)
+    provider = _get_provider(provider_name)
+
+    # 5. Create processing run
     run_id = generate_run_id()
     now = now_iso()
-    provider = _get_provider(provider_name)
 
     with get_connection() as conn:
         conn.execute(
@@ -81,12 +124,15 @@ def analyse_source(
         )
 
     try:
-        # 2. Parse PDF
+        # 6. Parse PDF
         parse_result = parse_pdf(source_id, package_dir)
 
-        # 3. Check low text density
+        # 7. Check low text density
         if parse_result["quality"]["is_low_text_density"]:
             _fail_run(run_id, "SCAN_OR_LOW_TEXT_DENSITY", "Low text density detected")
+            if task_id:
+                from evidence_agent.database.repositories import update_task_status
+                update_task_status(task_id, "failed")
             return {
                 "run_id": run_id,
                 "status": "failed",
@@ -94,18 +140,11 @@ def analyse_source(
                 "message": "PDF appears to be scanned or has very low text density.",
             }
 
-        # 4. Extract claims
-        task_desc = "Extract all author claims from the scientific text."
-        if task_id:
-            from evidence_agent.database.repositories import get_task
-            t = get_task(task_id)
-            if t:
-                task_desc = t.get("user_request", task_desc)
-
+        # 8. Extract claims
         raw_claims, extraction_report = extract_claims_from_source(
             parse_result["sections"],
             task_description=task_desc,
-            analysis_depth="source_complete",
+            analysis_depth=analysis_depth,
             provider=provider,
         )
 
@@ -114,7 +153,41 @@ def analyse_source(
         analysis_dir.mkdir(exist_ok=True)
         _save_jsonl(raw_claims, analysis_dir / "claims.raw.jsonl")
 
-        # 5. Validate claims
+        # 9. Check for NO_ANALYZABLE_TEXT
+        blocks_processed = extraction_report.get("blocks_processed", 0)
+        blocks_failed = extraction_report.get("blocks_failed", 0)
+
+        if blocks_processed == 0:
+            msg = "No analyzable text blocks found in the document."
+            _fail_run(run_id, "NO_ANALYZABLE_TEXT", msg)
+            if task_id:
+                from evidence_agent.database.repositories import update_task_status
+                update_task_status(task_id, "failed")
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error": "NO_ANALYZABLE_TEXT",
+                "message": msg,
+            }
+
+        if blocks_failed == blocks_processed:
+            msg = f"All {blocks_processed} blocks failed extraction."
+            _fail_run(run_id, "PROVIDER_ALL_BLOCKS_FAILED", msg)
+            if task_id:
+                from evidence_agent.database.repositories import update_task_status
+                update_task_status(task_id, "failed")
+            return {
+                "run_id": run_id,
+                "status": "failed",
+                "error": "PROVIDER_ALL_BLOCKS_FAILED",
+                "message": msg,
+            }
+
+        warnings: list[str] = []
+        if blocks_failed > 0:
+            warnings.append(f"{blocks_failed}/{blocks_processed} blocks had errors")
+
+        # 10. Validate claims
         validated, failed_locator, invalid_schema = validate_claims(
             raw_claims,
             parse_result["sections"],
@@ -128,7 +201,14 @@ def analyse_source(
             analysis_dir / "unresolved_items.jsonl",
         )
 
-        # 6. Persist validated claims to database
+        # 11. Check if source_complete produced 0 validated claims
+        if len(validated) == 0 and analysis_depth == "source_complete":
+            warnings.append(
+                "source_complete analysis produced 0 validated claims "
+                "(text may have no extractable claims)"
+            )
+
+        # 12. Persist validated claims to database
         persisted_count = _persist_claims(
             validated, source_id, task_id, run_id
         )
@@ -136,7 +216,7 @@ def analyse_source(
         # Save persisted snapshot
         _save_jsonl(validated, analysis_dir / "claims.persisted.jsonl")
 
-        # 7. Save provenance
+        # 13. Save provenance
         provenance_dir = package_dir / "provenance"
         provenance_dir.mkdir(exist_ok=True)
         run_record = {
@@ -149,13 +229,17 @@ def analyse_source(
             "status": "completed",
             "started_at": now,
             "completed_at": now_iso(),
-            "candidate_claims": extraction_report["candidate_claims"],
+            "candidate_claims": extraction_report.get("candidate_claims", 0),
             "validated_claims": len(validated),
             "persisted_claims": persisted_count,
+            "blocks_processed": blocks_processed,
+            "blocks_failed": blocks_failed,
+            "analysis_depth": analysis_depth,
+            "warnings": warnings,
         }
         _save_jsonl([run_record], provenance_dir / "processing_runs.jsonl")
 
-        # 8. Update manifest with analysis info
+        # 14. Update manifest with analysis info
         manifest_path = package_dir / "manifest.json"
         if manifest_path.exists():
             manifest = json.loads(manifest_path.read_text())
@@ -163,22 +247,27 @@ def analyse_source(
                 "run_id": run_id,
                 "completed_at": run_record["completed_at"],
                 "validated_claims": len(validated),
+                "analysis_depth": analysis_depth,
             }
-            manifest["artifacts"] = [
-                "parsed/pages.jsonl",
-                "parsed/sections.jsonl",
-                "analysis/claims.raw.jsonl",
-                "analysis/claims.validated.jsonl",
-                "analysis/claims.persisted.jsonl",
-                "analysis/unresolved_items.jsonl",
-                "provenance/processing_runs.jsonl",
-            ]
             manifest_path.write_text(
                 json.dumps(manifest, indent=2, ensure_ascii=False)
             )
 
-        # 9. Complete run
-        _complete_run(run_id)
+        # 15. Complete run with metadata
+        _complete_run(
+            run_id,
+            input_hash=_compute_input_hash(
+                source_id, package_dir, task_desc, provider, analysis_depth
+            ),
+            output_hash=_compute_output_hash(validated, failed_locator, invalid_schema),
+            warnings=warnings,
+        )
+
+        # 16. Update task status
+        if task_id:
+            from evidence_agent.database.repositories import update_task_status
+            new_status = "review" if persisted_count > 0 else "completed"
+            update_task_status(task_id, new_status)
 
         return {
             "run_id": run_id,
@@ -187,13 +276,15 @@ def analyse_source(
             "task_id": task_id,
             "pages": parse_result["quality"]["total_pages"],
             "sections": len(parse_result["sections"]),
-            "candidate_claims": extraction_report["candidate_claims"],
+            "candidate_claims": extraction_report.get("candidate_claims", 0),
             "validated_claims": len(validated),
             "persisted_claims": persisted_count,
             "failed_locators": len(failed_locator),
             "invalid_schema": len(invalid_schema),
             "model": provider.model_name,
             "prompt": provider.prompt_version,
+            "analysis_depth": analysis_depth,
+            "warnings": warnings,
             "next_action": (
                 f"review export {run_id}"
                 if persisted_count > 0
@@ -203,7 +294,65 @@ def analyse_source(
 
     except Exception as e:
         _fail_run(run_id, type(e).__name__, str(e))
+        if task_id:
+            try:
+                from evidence_agent.database.repositories import update_task_status
+                update_task_status(task_id, "failed")
+            except Exception:
+                pass
         raise
+
+
+def _compute_input_hash(
+    source_id: str,
+    package_dir: Path,
+    task_desc: str,
+    provider: ClaimExtractionProvider,
+    analysis_depth: str,
+) -> str:
+    """Compute deterministic input hash for a processing run."""
+    import hashlib
+
+    orig_pdf = package_dir / "original" / "main.pdf"
+    pdf_hash = ""
+    if orig_pdf.exists():
+        pdf_hash = hashlib.sha256(orig_pdf.read_bytes()).hexdigest()[:16]
+
+    components = [
+        source_id,
+        pdf_hash,
+        task_desc,
+        provider.model_name,
+        provider.prompt_version,
+        analysis_depth,
+    ]
+    return hashlib.sha256("|".join(components).encode()).hexdigest()[:16]
+
+
+def _compute_output_hash(
+    validated: list[dict[str, Any]],
+    failed_locator: list[dict[str, Any]],
+    invalid_schema: list[dict[str, Any]],
+) -> str:
+    """Compute deterministic output hash from claim JSON."""
+    import hashlib
+
+    claims_json = json.dumps(
+        {
+            "validated": [
+                {k: v for k, v in c.items() if not k.startswith("_")}
+                for c in validated
+            ],
+            "failed_locator": [
+                {k: v for k, v in c.items() if not k.startswith("_")}
+                for c in failed_locator
+            ],
+            "invalid_schema": len(invalid_schema),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(claims_json.encode()).hexdigest()[:16]
 
 
 def _persist_claims(
@@ -228,7 +377,6 @@ def _persist_claims(
             now = now_iso()
             locator = claim.get("locator_hint", {})
 
-            # Insert claim
             conn.execute(
                 "INSERT INTO source_claims (claim_id, source_id, task_id, "
                 "claim_type, source_quote, faithful_paraphrase, "
@@ -255,7 +403,6 @@ def _persist_claims(
                 ),
             )
 
-            # Insert locator
             page = locator.get("page") or claim.get("_block_page_start")
             conn.execute(
                 "INSERT INTO claim_locators (locator_id, claim_id, section_id, "
@@ -276,13 +423,23 @@ def _persist_claims(
     return count
 
 
-def _complete_run(run_id: str) -> None:
-    """Mark a processing run as completed."""
+def _complete_run(
+    run_id: str,
+    input_hash: str = "",
+    output_hash: str = "",
+    warnings: list[str] | None = None,
+) -> None:
+    """Mark a processing run as completed with metadata."""
+    import json as _json
+
+    warning_json = _json.dumps(warnings or [])
     with get_connection() as conn:
         conn.execute(
             "UPDATE processing_runs SET status = 'completed', "
-            "completed_at = ? WHERE run_id = ?",
-            (now_iso(), run_id),
+            "input_hash = ?, output_hash = ?, "
+            "warning_json = ?, completed_at = ? "
+            "WHERE run_id = ?",
+            (input_hash, output_hash, warning_json, now_iso(), run_id),
         )
 
 

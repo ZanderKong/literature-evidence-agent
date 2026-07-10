@@ -12,6 +12,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (1, "001_initial.sql"),
     (2, "002_fts.sql"),
     (3, "003_constraints.sql"),
+    (4, "004_review_batches.sql"),
 ]
 
 
@@ -55,7 +56,22 @@ def run_migration(conn: sqlite3.Connection, version: int, name: str) -> None:
         raise FileNotFoundError(f"Migration file not found: {path}")
 
     sql = path.read_text(encoding="utf-8")
-    conn.executescript(sql)
+
+    # Split and execute each statement individually to handle
+    # ALTER TABLE ADD COLUMN idempotency
+    for statement in sql.split(";"):
+        statement = statement.strip()
+        if not statement:
+            continue
+        try:
+            conn.execute(statement)
+        except sqlite3.OperationalError as e:
+            err_msg = str(e).lower()
+            if "duplicate column name" in err_msg:
+                # Column already exists, skip safely
+                continue
+            raise
+
     conn.execute(
         "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
         (version, name),

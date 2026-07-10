@@ -73,3 +73,17 @@ def list_tasks(status: str | None = None, limit: int = 20) -> list[dict[str, Any
                 (limit,),
             )
         return [dict(row) for row in cursor.fetchall()]
+
+
+def update_task_status(task_id: str, status: str) -> None:
+    """Update task status and updated_at timestamp."""
+    valid_statuses = {"created", "running", "review", "completed", "failed"}
+    if status not in valid_statuses:
+        raise ValueError(
+            f"Invalid task status: '{status}'. Must be one of {valid_statuses}"
+        )
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE research_tasks SET status = ?, updated_at = ? WHERE task_id = ?",
+            (status, now_iso(), task_id),
+        )

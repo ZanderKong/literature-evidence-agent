@@ -157,6 +157,6 @@ class TestVerifyWeakChecks:
             failed = e.code != 0
 
         assert failed, (
-            "FLAW: database_rebuild only checks migration version >= 3. "
+            "FLAW: database_rebuild only checks migration version >= 4. "
             "A freshly migrated DB without any rebuild should not pass."
         )

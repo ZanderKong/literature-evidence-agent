@@ -26,6 +26,24 @@ from evidence_agent.parsers.pdf import parse_pdf
 from evidence_agent.validators.quote import validate_claims
 
 
+def _detect_code_commit() -> str:
+    """Detect the current git commit hash, or 'unknown' if not in a repo."""
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()[:8]
+    except Exception:
+        pass
+    return "unknown"
+
+
 def _get_provider(name: str) -> ClaimExtractionProvider:
     """Get provider by name. Only mock and deepseek are valid."""
     if name is None or name == "":
@@ -106,19 +124,27 @@ def analyse_source(
     # 5. Create processing run
     run_id = generate_run_id()
     now = now_iso()
+    parser_name = "pdfplumber"
+    parser_version = "0.11"
+    code_commit = _detect_code_commit()
 
     with get_connection() as conn:
         conn.execute(
             "INSERT INTO processing_runs (run_id, task_id, source_id, "
-            "module_name, model_name, prompt_version, input_hash, status, "
-            "started_at) VALUES (?, ?, ?, 'analyse', ?, ?, ?, 'started', ?)",
+            "module_name, model_name, model_mode, prompt_version, "
+            "parser_name, parser_version, code_commit, "
+            "input_hash, status, started_at) "
+            "VALUES (?, ?, ?, 'analyse', ?, ?, ?, ?, ?, ?, 'pending', 'started', ?)",
             (
                 run_id,
                 task_id,
                 source_id,
                 provider.model_name,
+                "extraction",
                 provider.prompt_version,
-                "pending",
+                parser_name,
+                parser_version,
+                code_commit,
                 now,
             ),
         )
@@ -128,7 +154,7 @@ def analyse_source(
         parse_result = parse_pdf(source_id, package_dir)
 
         # 7. Persist sections to database (before any failure exit)
-        _persist_sections(source_id, parse_result["sections"], "pdfplumber", "0.11")
+        _persist_sections(source_id, parse_result["sections"], parser_name, parser_version)
 
         # 8. Check low text density
         if parse_result["quality"]["is_low_text_density"]:

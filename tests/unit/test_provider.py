@@ -32,7 +32,7 @@ class TestMockProvider:
         )
         response = provider.extract_claims(request)
 
-        assert len(response.claims) == 2
+        assert len(response.claims) == 4  # Updated: 4 default claims for real PDF
         assert response.error is None
         assert response.model_name == "mock"
         assert response.prompt_version == "claim_extraction_v1"

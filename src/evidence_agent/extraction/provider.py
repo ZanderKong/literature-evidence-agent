@@ -116,45 +116,89 @@ class MockProvider:
 
     @staticmethod
     def _default_claims() -> list[dict[str, Any]]:
+        """Default mock claims matching real scientific PDF content."""
         return [
             {
                 "claim_type": "reported_result",
-                "source_quote": "The solubility increased from 1.0 to 5.2 mg/mL.",
-                "faithful_paraphrase": "溶解度从 1.0 增加到 5.2 mg/mL。",
-                "evidence_basis_description": "基于 Figure 1 的相溶解度实验。",
-                "scope_description": "在水溶液中 25°C 条件。",
+                "source_quote": (
+                    "The solubility of curcumin increased from "
+                    "0.6 microgram per mL to 3.2 mg per mL upon "
+                    "complexation with HP-beta-CD at a 1:2 molar ratio"
+                ),
+                "faithful_paraphrase": (
+                    "姜黄素与HP-beta-CD以1:2摩尔比络合后，"
+                    "溶解度从0.6 microgram/mL增加至3.2 mg/mL。"
+                ),
+                "evidence_basis_description": "基于相溶解度实验数据。",
+                "scope_description": "适用于HP-beta-CD/姜黄素水溶液体系。",
                 "author_hedging": None,
                 "locator_hint": {
                     "page": 1,
-                    "section_heading": "Results",
-                    "figure_label": "Figure 1",
-                    "table_label": None,
+                    "section_heading": "Abstract",
                 },
                 "entities": [],
             },
             {
                 "claim_type": "author_interpretation",
                 "source_quote": (
-                    "This suggests that hydrogen bonding "
-                    "plays a key role in the stabilization."
+                    "This suggests that the aromatic ring of curcumin "
+                    "is deeply inserted into the hydrophobic cavity of "
+                    "HP-beta-CD, while the phenolic groups form hydrogen "
+                    "bonds with the rim hydroxyls"
                 ),
-                "faithful_paraphrase": "作者认为氢键在稳定化中起关键作用。",
-                "evidence_basis_description": "基于 FT-IR 和 NMR 数据推断。",
+                "faithful_paraphrase": (
+                    "作者提出姜黄素芳香环深入HP-beta-CD疏水空腔，"
+                    "酚羟基与边缘羟基形成氢键。"
+                ),
+                "evidence_basis_description": "基于FT-IR光谱数据（Figure 1）推断。",
                 "scope_description": None,
                 "author_hedging": "suggests",
                 "locator_hint": {
-                    "page": 2,
-                    "section_heading": "Discussion",
-                    "figure_label": "Figure 3",
-                    "table_label": None,
+                    "page": 1,
+                    "section_heading": "Results",
+                    "figure_label": "Figure 1",
+                    "table_label": "Table 1",
+                },
+                "entities": [],
+            },
+            {
+                "claim_type": "author_limitation",
+                "source_quote": (
+                    "However the in vitro dissolution results may not "
+                    "directly predict in vivo performance and further "
+                    "pharmacokinetic studies are warranted"
+                ),
+                "faithful_paraphrase": (
+                    "作者指出体外溶出结果可能无法直接预测体内表现，"
+                    "需要进一步的药代动力学研究。"
+                ),
+                "evidence_basis_description": "作者自述的研究局限性。",
+                "scope_description": None,
+                "author_hedging": "may not",
+                "locator_hint": {
+                    "page": 1,
+                    "section_heading": "Results",
+                },
+                "entities": [],
+            },
+            {
+                "claim_type": "future_work",
+                "source_quote": (
+                    "Future work should investigate the in vivo "
+                    "bioavailability of the curcumin-HP-beta-CD complex "
+                    "in animal models"
+                ),
+                "faithful_paraphrase": "未来应研究该包含物的体内生物利用度。",
+                "evidence_basis_description": "作者建议的后续研究方向。",
+                "scope_description": None,
+                "author_hedging": "should",
+                "locator_hint": {
+                    "page": 1,
+                    "section_heading": "Conclusion",
                 },
                 "entities": [],
             },
         ]
-
-
-# ── DeepSeek Provider ──────────────────────────────────
-
 class DeepSeekProvider:
     """Calls the DeepSeek API with thinking mode enabled.
 

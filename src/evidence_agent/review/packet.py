@@ -44,7 +44,7 @@ def generate_review_packet(
             f"NO_PENDING_CLAIMS: No pending claims for run {run_id}"
         )
 
-    source_title = claims[0].get("source_title", "Untitled")
+    source_title = (claims[0].get("source_title") or "Untitled")
 
     # Generate outputs
     paths: dict[str, str] = {}

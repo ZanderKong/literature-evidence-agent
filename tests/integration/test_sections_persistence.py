@@ -60,7 +60,7 @@ class TestSectionsPersistence:
         from evidence_agent.database.connection import get_connection
         from evidence_agent.application.analyse import analyse_source
 
-        result = analyse_source("SRC-test-sec", provider_name="mock")
+        analyse_source("SRC-test-sec", provider_name="mock")
 
         with get_connection(read_only=True) as conn:
             cursor = conn.execute(
@@ -73,36 +73,17 @@ class TestSectionsPersistence:
             f"Sections persisted: {count}. analyse() should persist parsed "
             f"sections to the source_sections table after parsing."
         )
-
     def test_parser_writes_sections_to_files_but_not_db(self, setup):
-        """Parse writes sections.jsonl but the database should also have them."""
-        from evidence_agent.parsers.pdf import parse_pdf
-
-        ctx = setup
-        package_dir = ctx.sources_dir / "SRC-test-sec"
-        result = parse_pdf("SRC-test-sec", package_dir)
-
-        sections_path = package_dir / "parsed" / "sections.jsonl"
-        assert sections_path.exists(), "Parse didn't create sections.jsonl"
-
-        sections_from_file = []
-        with open(sections_path) as f:
-            for line in f:
-                if line.strip():
-                    sections_from_file.append(json.loads(line))
-
-        assert len(sections_from_file) > 0, "Parse produced 0 sections"
-
+        """parse_source() persists sections to both files and DB."""
+        from evidence_agent.application.parse import parse_source
         from evidence_agent.database.connection import get_connection
-        with get_connection(read_only=True) as conn:
-            cursor = conn.execute(
-                "SELECT COUNT(*) as cnt FROM source_sections WHERE source_id = ?",
-                ("SRC-test-sec",),
-            )
-            db_count = cursor.fetchone()["cnt"]
 
-        assert db_count > 0, (
-            f"FLAW: sections.jsonl has {len(sections_from_file)} sections, "
-            f"but DB source_sections has {db_count}. "
-            f"parse() doesn't persist sections to the database."
-        )
+        result = parse_source("SRC-test-sec")
+        assert result.sections_persisted > 0
+
+        with get_connection(read_only=True) as conn:
+            db_count = conn.execute(
+                "SELECT COUNT(*) FROM source_sections WHERE source_id=?",
+                ("SRC-test-sec",),
+            ).fetchone()[0]
+        assert db_count > 0, f"DB has {db_count} sections"

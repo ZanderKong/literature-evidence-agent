@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from evidence_agent.application.parse import parse_source
 from evidence_agent.database.connection import get_connection, transaction
 from evidence_agent.extraction.claims import extract_claims_from_source
 from evidence_agent.extraction.provider import (
@@ -21,7 +22,6 @@ from evidence_agent.ids import (
     generate_run_id,
     now_iso,
 )
-from evidence_agent.parsers.pdf import parse_pdf
 from evidence_agent.runtime import RuntimeContext, get_current_context
 from evidence_agent.validators.quote import validate_claims
 
@@ -153,14 +153,18 @@ def analyse_source(
         )
 
     try:
-        # 6. Parse PDF
-        parse_result = parse_pdf(source_id, package_dir)
+        # 6. Parse PDF (via application service — persists sections to DB)
+        parse_result = parse_source(source_id, ctx=runtime)
+        if parse_result.status == "failed":
+            raise ValueError(f"Parse failed: {parse_result.error}")
 
-        # 7. Persist sections to database (before any failure exit)
-        _persist_sections(source_id, parse_result["sections"], parser_name, parser_version)
+        # Load sections from file for claim extraction
+        sections_path = package_dir / "parsed" / "sections.jsonl"
+        sections = _load_jsonl(sections_path) if sections_path.exists() else []
+        pages_path = package_dir / "parsed" / "pages.jsonl"
+        pages = _load_jsonl(pages_path) if pages_path.exists() else []
 
-        # 8. Check low text density
-        if parse_result["quality"]["is_low_text_density"]:
+        if parse_result.low_text_density:
             _fail_run(run_id, "SCAN_OR_LOW_TEXT_DENSITY", "Low text density detected")
             if task_id:
                 from evidence_agent.database.repositories import update_task_status
@@ -174,7 +178,7 @@ def analyse_source(
 
         # 10. Extract claims
         raw_claims, extraction_report = extract_claims_from_source(
-            parse_result["sections"],
+            sections,
             task_description=task_desc,
             analysis_depth=analysis_depth,
             provider=provider,
@@ -222,8 +226,8 @@ def analyse_source(
         # 10. Validate claims
         validated, failed_locator, invalid_schema = validate_claims(
             raw_claims,
-            parse_result["sections"],
-            parse_result["pages"],
+            sections,
+            pages,
         )
 
         # Save validated/failed
@@ -313,8 +317,8 @@ def analyse_source(
             "status": "completed",
             "source_id": source_id,
             "task_id": task_id,
-            "pages": parse_result["quality"]["total_pages"],
-            "sections": len(parse_result["sections"]),
+            "pages": parse_result.total_pages,
+            "sections": len(sections),
             "candidate_claims": extraction_report.get("candidate_claims", 0),
             "validated_claims": len(validated),
             "persisted_claims": persisted_count,
@@ -519,51 +523,6 @@ def _fail_run(run_id: str, error_type: str, error_msg: str) -> None:
         )
 
 
-def _persist_sections(
-    source_id: str,
-    sections: list[dict[str, Any]],
-    parser_name: str,
-    parser_version: str,
-) -> int:
-    """Persist parsed sections to source_sections table (idempotent by text hash)."""
-    import hashlib
-
-    from evidence_agent.ids import generate_section_id
-
-    if not sections:
-        return 0
-
-    persisted = 0
-    with transaction() as conn:
-        for seq, sec in enumerate(sections, 1):
-            text = sec.get("text", "")
-            text_sha256 = hashlib.sha256(text.encode()).hexdigest()
-
-            section_id = generate_section_id()
-
-            conn.execute(
-                "INSERT OR IGNORE INTO source_sections "
-                "(section_id, source_id, section_type, heading, "
-                "page_start, page_end, sequence_number, text, "
-                "parser_name, parser_version, text_sha256) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    section_id,
-                    source_id,
-                    sec.get("section_type", "body"),
-                    sec.get("heading"),
-                    sec.get("page_start"),
-                    sec.get("page_end"),
-                    seq,
-                    text,
-                    parser_name,
-                    parser_version,
-                    text_sha256,
-                ),
-            )
-            persisted += 1
-
-    return persisted
 
 
 def _save_jsonl(items: list[dict[str, Any]], path: Path) -> None:
@@ -586,3 +545,13 @@ def _atomic_save_jsonl(items: list[dict[str, Any]], path: Path) -> None:
         f.flush()
         _os.fsync(f.fileno())
     _os.replace(str(tmp), str(path))
+
+
+def _load_jsonl(path: Path) -> list[dict[str, Any]]:
+    """Load a JSONL file into a list of dicts."""
+    items: list[dict[str, Any]] = []
+    for line in path.read_text().strip().split("\n"):
+        line = line.strip()
+        if line:
+            items.append(json.loads(line))
+    return items

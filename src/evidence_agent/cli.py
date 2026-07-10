@@ -191,25 +191,21 @@ def ingest(file: str) -> None:
 @app.command()
 def parse(source_id: str) -> None:
     """Parse an imported PDF source."""
-    from evidence_agent.parsers.pdf import parse_pdf
-    from evidence_agent.runtime import get_current_context
-
-    ctx = get_current_context()
-    package_dir = ctx.sources_dir / source_id
-
-    if not package_dir.exists():
-        typer.echo(f"Source not found: {source_id}", err=True)
-        raise typer.Exit(code=2)
+    from evidence_agent.application.parse import parse_source
 
     try:
-        result = parse_pdf(source_id, package_dir)
+        result = parse_source(source_id)
+        if result.status == "failed":
+            typer.echo(f"Parse failed: {result.error}", err=True)
+            raise typer.Exit(code=4)
         typer.echo(f"Parsed {source_id}")
-        typer.echo(f"  Pages: {result['quality']['total_pages']}")
-        typer.echo(f"  Sections: {result['quality'].get('section_count', len(result['sections']))}")
-        typer.echo(f"  Low text density: {result['quality']['is_low_text_density']}")
-        for name, path in result["output_paths"].items():
+        typer.echo(f"  Pages: {result.total_pages}")
+        typer.echo(f"  Sections: {result.section_count}")
+        typer.echo(f"  Persisted: {result.sections_persisted}")
+        typer.echo(f"  Low text density: {result.low_text_density}")
+        for name, path in result.output_paths.items():
             typer.echo(f"  {name}: {path}")
-    except FileNotFoundError as e:
+    except Exception as e:
         typer.echo(f"Parse failed: {e}", err=True)
         raise typer.Exit(code=4) from e
     except Exception as e:

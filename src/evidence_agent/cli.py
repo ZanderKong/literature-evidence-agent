@@ -209,12 +209,13 @@ def export(run_id: str) -> None:
     from evidence_agent.review.packet import generate_review_packet
 
     try:
-        paths = generate_review_packet(
-            validated_claims=[],
-            failed_locators=[],
-            run_id=run_id,
-        )
-        typer.echo(f"Review packet created at: {paths['csv']}")
+        paths = generate_review_packet(run_id)
+        typer.echo(f"Review packet: {paths['csv']}")
+        for k, v in paths.items():
+            typer.echo(f"  {k}: {v}")
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=6) from e
     except Exception as e:
         typer.echo(f"Review export failed: {e}", err=True)
         raise typer.Exit(code=6) from e
@@ -317,6 +318,56 @@ def analyse(
     except Exception as e:
         typer.echo(f"Analysis failed: {e}", err=True)
         raise typer.Exit(code=5) from e
+
+
+@app.command()
+def source_show(source_id: str) -> None:
+    """Show source details."""
+    import json as _json
+
+    from evidence_agent.database.connection import get_connection
+    with get_connection(read_only=True) as conn:
+        cursor = conn.execute("SELECT * FROM sources WHERE source_id=?", (source_id,))
+        row = cursor.fetchone()
+        if not row:
+            typer.echo(f"Source not found: {source_id}", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(_json.dumps(dict(row), indent=2, default=str))
+
+
+@app.command()
+def claim_show(claim_id: str) -> None:
+    """Show claim details."""
+    import json as _json
+
+    from evidence_agent.database.connection import get_connection
+    with get_connection(read_only=True) as conn:
+        cursor = conn.execute(
+            "SELECT c.*, l.page, l.figure_label, l.table_label "
+            "FROM source_claims c "
+            "LEFT JOIN claim_locators l ON c.claim_id = l.claim_id "
+            "WHERE c.claim_id=?", (claim_id,))
+        row = cursor.fetchone()
+        if not row:
+            typer.echo(f"Claim not found: {claim_id}", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(_json.dumps(dict(row), indent=2, default=str))
+
+
+@app.command()
+def run_show(run_id: str) -> None:
+    """Show processing run details."""
+    import json as _json
+
+    from evidence_agent.database.connection import get_connection
+    with get_connection(read_only=True) as conn:
+        cursor = conn.execute(
+            "SELECT * FROM processing_runs WHERE run_id=?", (run_id,))
+        row = cursor.fetchone()
+        if not row:
+            typer.echo(f"Run not found: {run_id}", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(_json.dumps(dict(row), indent=2, default=str))
 
 
 @app.command()

@@ -67,25 +67,21 @@ class TestSectionsPersistence:
         with get_connection() as conn:
             conn.execute(
                 "INSERT INTO sources (source_id, source_type, title, "
-                "original_file_sha256, origin_scope, "
+                "authors_json, original_file_sha256, origin_scope, "
                 "scientific_verification_status, created_at, updated_at) "
                 "VALUES ('SRC-test-sec', 'journal_article', 'Test', "
-                "'sha256:sections_test', 'external', 'unverified', "
+                "'[]', 'sha256:sections_test', 'external', 'unverified', "
                 "'2025-01-01T00:00:00', '2025-01-01T00:00:00')"
             )
 
         return config
 
     def test_analyse_does_not_persist_sections_to_db(self, setup):
-        """After analyse, source_sections DB table should have data — but currently doesn't."""
+        """After analyse, source_sections DB table should have data."""
         from evidence_agent.database.connection import get_connection
         from evidence_agent.application.analyse import analyse_source
 
-        try:
-            result = analyse_source("SRC-test-sec", provider_name="mock")
-        except Exception:
-            # Analyse may fail for various reasons on a minimally set up source
-            pass
+        result = analyse_source("SRC-test-sec", provider_name="mock")
 
         with get_connection(read_only=True) as conn:
             cursor = conn.execute(
@@ -95,9 +91,8 @@ class TestSectionsPersistence:
             count = cursor.fetchone()["cnt"]
 
         assert count > 0, (
-            f"FLAW: 0 sections persisted to source_sections table ({count}). "
-            f"analyse() currently writes sections to JSONL files only, "
-            f"not to the database."
+            f"Sections persisted: {count}. analyse() should persist parsed "
+            f"sections to the source_sections table after parsing."
         )
 
     def test_parser_writes_sections_to_files_but_not_db(self, setup):

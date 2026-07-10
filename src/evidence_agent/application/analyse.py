@@ -127,7 +127,10 @@ def analyse_source(
         # 6. Parse PDF
         parse_result = parse_pdf(source_id, package_dir)
 
-        # 7. Check low text density
+        # 7. Persist sections to database (before any failure exit)
+        _persist_sections(source_id, parse_result["sections"], "pdfplumber", "0.11")
+
+        # 8. Check low text density
         if parse_result["quality"]["is_low_text_density"]:
             _fail_run(run_id, "SCAN_OR_LOW_TEXT_DENSITY", "Low text density detected")
             if task_id:
@@ -140,7 +143,7 @@ def analyse_source(
                 "message": "PDF appears to be scanned or has very low text density.",
             }
 
-        # 8. Extract claims
+        # 10. Extract claims
         raw_claims, extraction_report = extract_claims_from_source(
             parse_result["sections"],
             task_description=task_desc,
@@ -452,6 +455,53 @@ def _fail_run(run_id: str, error_type: str, error_msg: str) -> None:
             "WHERE run_id = ?",
             (error_type, error_msg, now_iso(), run_id),
         )
+
+
+def _persist_sections(
+    source_id: str,
+    sections: list[dict[str, Any]],
+    parser_name: str,
+    parser_version: str,
+) -> int:
+    """Persist parsed sections to source_sections table (idempotent by text hash)."""
+    import hashlib
+
+    from evidence_agent.ids import generate_section_id
+
+    if not sections:
+        return 0
+
+    persisted = 0
+    with transaction() as conn:
+        for seq, sec in enumerate(sections, 1):
+            text = sec.get("text", "")
+            text_sha256 = hashlib.sha256(text.encode()).hexdigest()
+
+            section_id = generate_section_id()
+
+            conn.execute(
+                "INSERT OR IGNORE INTO source_sections "
+                "(section_id, source_id, section_type, heading, "
+                "page_start, page_end, sequence_number, text, "
+                "parser_name, parser_version, text_sha256) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    section_id,
+                    source_id,
+                    sec.get("section_type", "body"),
+                    sec.get("heading"),
+                    sec.get("page_start"),
+                    sec.get("page_end"),
+                    seq,
+                    text,
+                    parser_name,
+                    parser_version,
+                    text_sha256,
+                ),
+            )
+            persisted += 1
+
+    return persisted
 
 
 def _save_jsonl(items: list[dict[str, Any]], path: Path) -> None:

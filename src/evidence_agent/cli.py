@@ -27,6 +27,63 @@ def version() -> None:
     typer.echo("literature-evidence-agent v0.1.0")
 
 
+# ── Task sub-commands ──────────────────────────────────
+
+task_app = typer.Typer(help="Research task management commands")
+app.add_typer(task_app, name="task")
+
+
+@task_app.command()
+def create(
+    title: str = typer.Option(..., "--title", "-t", help="Task title"),
+    request: str = typer.Option(..., "--request", "-r", help="User request"),
+    background: str = typer.Option(None, "--background", "-b", help="Research background"),
+    mode: str = typer.Option("analyse_uploaded", "--mode", "-m", help="Task mode"),
+    depth: str = typer.Option("task_focused", "--depth", "-d", help="Analysis depth"),
+) -> None:
+    """Create a new research task."""
+    from evidence_agent.database.repositories import create_task
+
+    try:
+        result = create_task(title, request, background, mode, depth)
+        typer.echo(f"Created task: {result['task_id']}")
+        typer.echo(f"  Title: {result['title']}")
+        typer.echo(f"  Mode: {result['task_mode']}")
+        typer.echo(f"  Depth: {result['analysis_depth']}")
+        typer.echo(f"  Status: {result['status']}")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2) from e
+
+
+@task_app.command()
+def show(task_id: str) -> None:
+    """Show details of a research task."""
+    from evidence_agent.database.repositories import get_task
+
+    task = get_task(task_id)
+    if task is None:
+        typer.echo(f"Task not found: {task_id}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(json.dumps(task, indent=2, default=str))
+
+
+@task_app.command()
+def list(
+    status: str = typer.Option(None, "--status", "-s", help="Filter by status"),
+) -> None:
+    """List research tasks."""
+    from evidence_agent.database.repositories import list_tasks
+
+    tasks = list_tasks(status=status)
+    if not tasks:
+        typer.echo("No tasks found.")
+    for t in tasks:
+        typer.echo(
+            f"[{t['task_id']}] {t['status']:10s} {t['title'][:50]}"
+        )
+
+
 # ── Database sub-commands ──────────────────────────────
 
 db_app = typer.Typer(help="Database management commands")

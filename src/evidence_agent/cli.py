@@ -298,6 +298,28 @@ def export_source(
 # ── Verify command ─────────────────────────────────────
 
 @app.command()
+def analyse(
+    source_id: str,
+    task: str = typer.Option(None, "--task", help="Task ID to associate"),
+    provider: str = typer.Option("mock", "--provider", help="Provider: mock|deepseek"),
+) -> None:
+    """Run full analysis pipeline on a source."""
+    from evidence_agent.application.analyse import analyse_source
+
+    try:
+        result = analyse_source(source_id, task, provider)
+        typer.echo(json.dumps(result, indent=2, default=str))
+        if result["status"] == "failed":
+            raise typer.Exit(code=5)
+    except ValueError as e:
+        typer.echo(f"Analysis failed: {e}", err=True)
+        raise typer.Exit(code=2) from e
+    except Exception as e:
+        typer.echo(f"Analysis failed: {e}", err=True)
+        raise typer.Exit(code=5) from e
+
+
+@app.command()
 def verify(round_name: str = "round1") -> None:
     """Run verification checks."""
     if round_name == "round1":

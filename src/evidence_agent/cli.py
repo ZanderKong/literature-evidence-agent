@@ -397,100 +397,22 @@ def verify(round_name: str = "round1") -> None:
 
 
 def _verify_round1() -> None:
-    """Run Round 1 verification with real checks."""
-    from evidence_agent.database.connection import get_connection
-    from evidence_agent.database.migrations import check as db_check
+    """Run Round 1 verification with real behavioral checks."""
+    from evidence_agent.verification.round1 import run_round1_verification
 
-    all_pass = True
+    report = run_round1_verification()
 
-    # 1. Database integrity
-    try:
-        r = db_check()
-        if r["integrity"] == "ok" and r["foreign_keys"] == "ok":
-            typer.echo("database_integrity=PASS")
+    for check in report.checks:
+        status = check["status"]
+        name = check["name"]
+        evidence = check.get("evidence", "")
+        reason = check.get("reason", "")
+        if status == "PASS":
+            typer.echo(f"{name}=PASS duration_ms={check['duration_ms']} evidence={evidence}")
         else:
-            typer.echo(f"database_integrity=FAIL ({r})")
-            all_pass = False
-    except Exception as e:
-        typer.echo(f"database_integrity=FAIL ({e})")
-        all_pass = False
+            typer.echo(f"{name}=FAIL duration_ms={check['duration_ms']} reason={reason} evidence={evidence}")
 
-    # 2. Ingest idempotency (check sources table exists and works)
-    try:
-        with get_connection(read_only=True) as conn:
-            conn.execute("SELECT COUNT(*) FROM sources")
-        typer.echo("ingest_idempotency=PASS")
-    except Exception as e:
-        typer.echo(f"ingest_idempotency=FAIL ({e})")
-        all_pass = False
-
-    # 3. Quote traceability (check claims have locators)
-    try:
-        with get_connection(read_only=True) as conn:
-            cur = conn.execute(
-                "SELECT COUNT(*) FROM source_claims sc "
-                "JOIN claim_locators cl ON sc.claim_id = cl.claim_id "
-                "WHERE sc.quote_match_status IN ('exact','normalised')")
-            if cur.fetchone()[0] >= 0:
-                typer.echo("quote_traceability=PASS")
-            else:
-                typer.echo("quote_traceability=FAIL (no traceable claims)")
-                all_pass = False
-    except Exception as e:
-        typer.echo(f"quote_traceability=FAIL ({e})")
-        all_pass = False
-
-    # 4. Review workflow (check review_decisions table schema)
-    try:
-        with get_connection(read_only=True) as conn:
-            conn.execute("SELECT COUNT(*) FROM review_decisions")
-        typer.echo("review_workflow=PASS")
-    except Exception as e:
-        typer.echo(f"review_workflow=FAIL ({e})")
-        all_pass = False
-
-    # 5. FTS search (check FTS tables exist)
-    try:
-        with get_connection(read_only=True) as conn:
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' "
-                "AND name='claim_fts'")
-            if cur.fetchone():
-                typer.echo("fts_search=PASS")
-            else:
-                typer.echo("fts_search=FAIL (no FTS table)")
-                all_pass = False
-    except Exception as e:
-        typer.echo(f"fts_search=FAIL ({e})")
-        all_pass = False
-
-    # 6. Database rebuild (check migration version >= 3)
-    try:
-        r = db_check()
-        if r["version"] >= 3:
-            typer.echo("database_rebuild=PASS")
-        else:
-            typer.echo(f"database_rebuild=FAIL (version {r['version']})")
-            all_pass = False
-    except Exception as e:
-        typer.echo(f"database_rebuild=FAIL ({e})")
-        all_pass = False
-
-    # 7. External data isolation
-    try:
-        with get_connection(read_only=True) as conn:
-            cur = conn.execute(
-                "SELECT COUNT(*) FROM sources WHERE origin_scope != 'external'")
-            if cur.fetchone()[0] == 0:
-                typer.echo("external_data_isolation=PASS")
-            else:
-                typer.echo("external_data_isolation=FAIL")
-                all_pass = False
-    except Exception as e:
-        typer.echo(f"external_data_isolation=FAIL ({e})")
-        all_pass = False
-
-    if all_pass:
+    if report.all_pass:
         typer.echo("ROUND1_VERIFICATION=PASS")
         raise typer.Exit(code=0)
     else:

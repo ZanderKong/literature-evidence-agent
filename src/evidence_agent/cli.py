@@ -112,5 +112,33 @@ def ingest(file: str) -> None:
         raise typer.Exit(code=2) from e
 
 
+@app.command()
+def parse(source_id: str) -> None:
+    """Parse an imported PDF source."""
+    from evidence_agent.config import config
+    from evidence_agent.parsers.pdf import parse_pdf
+
+    package_dir = config.sources_dir / source_id
+
+    if not package_dir.exists():
+        typer.echo(f"Source not found: {source_id}", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        result = parse_pdf(source_id, package_dir)
+        typer.echo(f"Parsed {source_id}")
+        typer.echo(f"  Pages: {result['quality']['total_pages']}")
+        typer.echo(f"  Sections: {result['quality'].get('section_count', len(result['sections']))}")
+        typer.echo(f"  Low text density: {result['quality']['is_low_text_density']}")
+        for name, path in result["output_paths"].items():
+            typer.echo(f"  {name}: {path}")
+    except FileNotFoundError as e:
+        typer.echo(f"Parse failed: {e}", err=True)
+        raise typer.Exit(code=4) from e
+    except Exception as e:
+        typer.echo(f"Parse failed: {e}", err=True)
+        raise typer.Exit(code=4) from e
+
+
 if __name__ == "__main__":
     app()

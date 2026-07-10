@@ -89,5 +89,28 @@ def rebuild() -> None:
         raise typer.Exit(code=3) from e
 
 
+@app.command()
+def ingest(file: str) -> None:
+    """Import a local PDF as an external source."""
+    from pathlib import Path
+
+    from evidence_agent.ingest.files import import_pdf
+
+    file_path = Path(file).resolve()
+
+    try:
+        result = import_pdf(file_path)
+        if result["is_new"]:
+            typer.echo(f"Imported: {result['source_id']}")
+        else:
+            typer.echo(f"Already imported: {result['source_id']}")
+        typer.echo(f"  Package: {result['package_dir']}")
+        typer.echo(f"  SHA-256: {result['sha256']}")
+        typer.echo(f"  Size: {result['file_size']} bytes")
+    except (ValueError, RuntimeError) as e:
+        typer.echo(f"Import failed: {e}", err=True)
+        raise typer.Exit(code=2) from e
+
+
 if __name__ == "__main__":
     app()

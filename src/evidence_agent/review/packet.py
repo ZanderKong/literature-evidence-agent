@@ -3,11 +3,22 @@
 Creates review_batches and review_batch_rows in the database
 for tracking and idempotency. Same run + same packet hash
 reuses existing batch/row IDs.
+
+Exports CSV/JSONL/MD/HTML with full context:
+- section heading, context_before/after, page, figure/table
+- model/mode, prompt version, parser version, code commit
+- review/scientific status
+- HTML-escaped in all formats
+- Only relative paths, no absolute paths
+- Atomic file writes
 """
 
 import csv
 import hashlib
+import html as html_mod
 import json
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +30,8 @@ CANONICAL_ROW_KEYS = [
     "claim_id", "claim_type", "source_quote", "faithful_paraphrase",
     "evidence_basis_description", "page", "figure_label", "table_label",
 ]
+
+CONTEXT_RADIUS = 240
 
 
 def hash_review_row(row: dict[str, Any]) -> str:
@@ -35,6 +48,74 @@ def hash_review_packet(row_hashes: list[str]) -> str:
     for rh in row_hashes:
         digest.update(rh.encode())
     return digest.hexdigest()
+
+
+def extract_quote_context(
+    section_text: str, quote: str, radius: int = CONTEXT_RADIUS,
+) -> tuple[str, str]:
+    """Extract context_before and context_after around a quote in section text.
+
+    Returns (context_before, context_after). Tries exact match first,
+    then normalised whitespace match.
+    """
+    if not section_text or not quote:
+        return ("", "")
+
+    def _find_pos(text: str, q: str) -> int:
+        idx = text.find(q)
+        if idx >= 0:
+            return idx
+
+        import re
+        q_norm = re.sub(r"\s+", "", q)
+        t_norm = re.sub(r"\s+", "", text)
+        idx_n = t_norm.find(q_norm)
+        if idx_n < 0:
+            return -1
+
+        pos = 0
+        nt = 0
+        for ch in text:
+            if ch.strip():
+                nt += 1
+            if nt > idx_n:
+                break
+            pos += 1
+        return pos
+
+    pos = _find_pos(section_text, quote)
+    if pos < 0:
+        return ("", "")
+
+    start = max(0, pos - radius)
+    end = min(len(section_text), pos + len(quote) + radius)
+
+    before = section_text[start:pos].strip()
+    after = section_text[pos + len(quote):end].strip()
+
+    return (before, after)
+
+
+def _esc(val: Any) -> str:
+    """HTML-escape a value, converting None to empty string."""
+    if val is None:
+        return ""
+    return html_mod.escape(str(val))
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """Write file atomically: tmp → flush → fsync → os.replace."""
+    fd, tmp_name = tempfile.mkstemp(suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, str(path))
+    except Exception:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+        raise
 
 
 def _lookup_existing_batch(run_id: str, packet_sha256: str) -> dict[str, Any] | None:
@@ -98,7 +179,7 @@ def _insert_batch(
 def generate_review_packet(
     run_id: str, output_dir: Path | None = None
 ) -> dict[str, str]:
-    """Generate review packet from database claims for a processing run.
+    """Generate review packet with full context and provenance.
 
     Idempotent: same run + same claims content reuses existing batch/row IDs.
     """
@@ -108,24 +189,42 @@ def generate_review_packet(
         output_dir = runtime.review_dir / run_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    query = (
+        "SELECT c.*, l.page, l.figure_label, l.table_label, "
+        "l.locator_confidence, "
+        "s.title as source_title, "
+        "ss.heading as section_heading, ss.text as section_text, "
+        "a.relative_path as asset_relative_path, "
+        "r.model_name, r.model_mode, r.prompt_version, "
+        "r.parser_name as run_parser_name, r.code_commit "
+        "FROM source_claims c "
+        "LEFT JOIN claim_locators l ON c.claim_id = l.claim_id "
+        "LEFT JOIN sources s ON c.source_id = s.source_id "
+        "LEFT JOIN source_assets a ON c.source_id = a.source_id "
+        "LEFT JOIN source_sections ss "
+        "  ON c.source_id = ss.source_id AND l.page = ss.page_start "
+        "LEFT JOIN processing_runs r "
+        "  ON c.created_by_run_id = r.run_id "
+        "WHERE c.created_by_run_id = ? "
+        "AND c.record_review_status = 'pending' "
+        "ORDER BY COALESCE(l.page, 2147483647), c.claim_type, c.claim_id"
+    )
+
     with get_connection(read_only=True) as conn:
-        cursor = conn.execute(
-            "SELECT c.*, l.page, l.figure_label, l.table_label, "
-            "l.locator_confidence, s.title as source_title "
-            "FROM source_claims c "
-            "LEFT JOIN claim_locators l ON c.claim_id = l.claim_id "
-            "LEFT JOIN sources s ON c.source_id = s.source_id "
-            "WHERE c.created_by_run_id = ? "
-            "AND c.record_review_status = 'pending' "
-            "ORDER BY COALESCE(l.page, 2147483647), c.claim_type, c.claim_id",
-            (run_id,),
-        )
+        cursor = conn.execute(query, (run_id,))
         claims = [dict(row) for row in cursor.fetchall()]
 
     if not claims:
         raise ValueError(
             f"NO_PENDING_CLAIMS: No pending claims for run {run_id}"
         )
+
+    for c in claims:
+        quote = c.get("source_quote") or ""
+        section_text = c.get("section_text") or ""
+        ctx_before, ctx_after = extract_quote_context(section_text, quote)
+        c["context_before"] = ctx_before
+        c["context_after"] = ctx_after
 
     row_hashes: list[str] = []
     canonical_rows: list[dict[str, Any]] = []
@@ -169,12 +268,7 @@ def generate_review_packet(
     paths["csv"] = str(csv_path)
 
     jsonl_path = output_dir / "claims_for_review.jsonl"
-    with open(jsonl_path, "w", encoding="utf-8") as f:
-        for c in claims:
-            cid = c["claim_id"]
-            info = claim_ids_to_row_info.get(cid, {})
-            merged = {**c, **{k: v for k, v in info.items() if v}}
-            f.write(json.dumps(merged, ensure_ascii=False) + "\n")
+    _write_jsonl(claims, claim_ids_to_row_info, jsonl_path)
     paths["jsonl"] = str(jsonl_path)
 
     md_path = output_dir / "review_packet.md"
@@ -186,16 +280,16 @@ def generate_review_packet(
     paths["html"] = str(html_path)
 
     inst_path = output_dir / "review_instructions.md"
-    inst_path.write_text(
+    _atomic_write_text(
+        inst_path,
         "# Review Instructions\n\n"
         "1. Open `claims_for_review.csv`.\n"
         "2. For each claim, set decision: approve, approve_with_edits, "
         "reject, mark_missing, needs_followup.\n"
         "3. If approve_with_edits, fill edited_* columns.\n"
         "4. Run: `evidence-agent review apply <path>`\n\n"
-        "⚠️ 'Approved' means the record faithfully reflects the source. "
+        "Warning: 'Approved' means the record faithfully reflects the source. "
         "It does NOT mean the claim has been verified internally.\n",
-        encoding="utf-8",
     )
     paths["instructions"] = str(inst_path)
 
@@ -210,10 +304,17 @@ def _write_csv(
     fields = [
         "review_batch_id", "review_row_id", "row_input_sha256",
         "packet_sha256", "run_id",
-        "claim_id", "source_id", "claim_type", "source_quote",
+        "claim_id", "source_id",
+        "source_title", "source_relative_path",
+        "claim_type", "source_quote",
+        "context_before", "context_after",
         "faithful_paraphrase", "evidence_basis_description",
-        "page", "section", "figure_label", "table_label",
+        "page", "section_id", "section_heading",
+        "figure_label", "table_label",
         "quote_match_status", "locator_confidence",
+        "model_name", "model_mode", "prompt_version",
+        "parser_name", "code_commit",
+        "record_review_status", "scientific_verification_status",
         "decision", "edited_source_quote", "edited_faithful_paraphrase",
         "edited_evidence_basis_description", "edited_claim_type",
         "edited_page", "edited_section",
@@ -228,7 +329,40 @@ def _write_csv(
             row = {k: c.get(k, "") for k in fields}
             for k, v in hi.items():
                 row[k] = v
+            row["source_relative_path"] = c.get("asset_relative_path", "")
+            row["section_id"] = c.get("section_id", "")
+            row["section_heading"] = c.get("section_heading", "")
+            row["model_name"] = c.get("model_name", "")
+            row["model_mode"] = c.get("model_mode", "")
+            row["prompt_version"] = c.get("prompt_version", "")
+            row["parser_name"] = c.get("run_parser_name", "")
+            row["code_commit"] = c.get("code_commit", "")
+            row["record_review_status"] = c.get("record_review_status", "")
+            row["scientific_verification_status"] = (
+                c.get("scientific_verification_status", "")
+            )
             w.writerow(row)
+
+
+def _write_jsonl(
+    claims: list[dict[str, Any]],
+    batch_info: dict[str, dict[str, str]],
+    path: Path,
+) -> None:
+    lines = []
+    for c in claims:
+        cid = c["claim_id"]
+        hi = batch_info.get(cid, {})
+        merged = {**c, **{k: v for k, v in hi.items() if v}}
+        merged["source_relative_path"] = c.get("asset_relative_path", "")
+        merged["section_heading"] = c.get("section_heading", "")
+        merged["model_name"] = c.get("model_name", "")
+        merged["model_mode"] = c.get("model_mode", "")
+        merged["prompt_version"] = c.get("prompt_version", "")
+        merged["parser_name"] = c.get("run_parser_name", "")
+        merged["code_commit"] = c.get("code_commit", "")
+        lines.append(json.dumps(merged, ensure_ascii=False) + "\n")
+    _atomic_write_text(path, "".join(lines))
 
 
 def _write_md(
@@ -237,20 +371,38 @@ def _write_md(
     title: str,
     path: Path,
 ) -> None:
-    lines = [f"# Review — {title}\n", f"**Claims:** {len(claims)}\n", "---\n"]
+    lines = [
+        f"# Review — {title}\n",
+        "**External source. Scientific status: unverified.**\n",
+        f"**Claims:** {len(claims)}\n",
+        "---\n",
+    ]
     for i, c in enumerate(claims, 1):
-        cid = c.get("claim_id", f"CLM-{i}")
-        hi = batch_info.get(cid, {})
+        cid = _esc(c.get("claim_id", f"CLM-{i}"))
+        hi = batch_info.get(c.get("claim_id", ""), {})
         lines.append(f"## {i}. {cid}\n")
-        lines.append(f"- **Batch:** {hi.get('review_batch_id','N/A')}")
-        lines.append(f"- **Row:** {hi.get('review_row_id','N/A')}")
-        lines.append(f"- **Type:** {c.get('claim_type', 'N/A')}")
+        lines.append(f"- **Batch:** {_esc(hi.get('review_batch_id',''))}")
+        lines.append(f"- **Row:** {_esc(hi.get('review_row_id',''))}")
+        lines.append(f"- **Type:** {_esc(c.get('claim_type', ''))}")
         lines.append(f"- **Page:** {c.get('page', 'N/A')}")
-        lines.append(f"- **Match:** {c.get('quote_match_status', 'N/A')}\n")
-        lines.append(f"> {c.get('source_quote', 'N/A')}\n")
-        lines.append(f"**Paraphrase:** {c.get('faithful_paraphrase', '')}\n")
+        sec_heading = _esc(c.get("section_heading"))
+        if sec_heading:
+            lines.append(f"- **Section:** {sec_heading}")
+        lines.append(
+            f"- **Match:** {_esc(c.get('quote_match_status', ''))}\n"
+        )
+        ctx_before = _esc(c.get("context_before"))
+        if ctx_before:
+            lines.append(f"*Context before:* {ctx_before}\n")
+        lines.append(f"> {_esc(c.get('source_quote', 'N/A'))}\n")
+        ctx_after = _esc(c.get("context_after"))
+        if ctx_after:
+            lines.append(f"*Context after:* {ctx_after}\n")
+        lines.append(
+            f"**Paraphrase:** {_esc(c.get('faithful_paraphrase', ''))}\n"
+        )
         lines.append("---\n")
-    path.write_text("\n".join(lines), encoding="utf-8")
+    _atomic_write_text(path, "\n".join(lines))
 
 
 def _write_html(
@@ -259,32 +411,51 @@ def _write_html(
     title: str,
     path: Path,
 ) -> None:
-    import html as html_mod
     items = []
     for i, c in enumerate(claims, 1):
-        cid = html_mod.escape(c.get("claim_id", f"CLM-{i}"))
+        cid = _esc(c.get("claim_id", f"CLM-{i}"))
         hi = batch_info.get(c.get("claim_id", ""), {})
-        quote = html_mod.escape(c.get("source_quote", ""))
-        para = html_mod.escape(c.get("faithful_paraphrase", ""))
+        ctx_before = _esc(c.get("context_before"))
+        ctx_after = _esc(c.get("context_after"))
+        quote = _esc(c.get("source_quote", ""))
+        para = _esc(c.get("faithful_paraphrase", ""))
+        sec_heading = _esc(c.get("section_heading"))
+
+        meta = (
+            f"<p>"
+            f"<b>Batch:</b> {_esc(hi.get('review_batch_id',''))}"
+            f" | <b>Row:</b> {_esc(hi.get('review_row_id',''))}"
+            f" | <b>Type:</b> {_esc(c.get('claim_type',''))}"
+            f" | <b>Page:</b> {c.get('page','N/A')}"
+        )
+        if sec_heading:
+            meta += f" | <b>Section:</b> {sec_heading}"
+        meta += "</p>"
+
+        ctx_html = ""
+        if ctx_before:
+            ctx_html += f"<p class='context'><em>Before:</em> {ctx_before}</p>"
+        if ctx_after:
+            ctx_html += f"<p class='context'><em>After:</em> {ctx_after}</p>"
+
         items.append(
             f"<div class='claim'><h3>{i}. {cid}</h3>"
-            f"<p><b>Batch:</b> {html_mod.escape(hi.get('review_batch_id',''))}"
-            f" | <b>Row:</b> {html_mod.escape(hi.get('review_row_id',''))}"
-            f" | <b>Type:</b> {html_mod.escape(c.get('claim_type',''))}"
-            f" | <b>Page:</b> {c.get('page','N/A')}</p>"
+            f"{meta}"
             f"<blockquote>{quote}</blockquote>"
+            f"{ctx_html}"
             f"<p>{para}</p></div>"
         )
     html_doc = (
         "<!DOCTYPE html><html><head><meta charset='UTF-8'>"
-        f"<title>Review — {html_mod.escape(title)}</title>"
+        f"<title>Review — {_esc(title)}</title>"
         "<style>body{font-family:sans-serif;max-width:800px;margin:0 auto;"
         "padding:20px}.claim{border:1px solid #ddd;margin:8px 0;padding:12px}"
         "blockquote{background:#f5f5f5;padding:8px 16px;"
-        "border-left:4px solid #2196f3}</style></head><body>"
-        f"<h1>Review — {html_mod.escape(title)}</h1>"
+        "border-left:4px solid #2196f3}"
+        ".context{color:#666;font-size:0.9em}</style></head><body>"
+        f"<h1>Review — {_esc(title)}</h1>"
         "<p><b>External source. Scientific status: unverified.</b></p>"
         f"<p><b>Claims:</b> {len(claims)}</p>"
         + "".join(items) + "</body></html>"
     )
-    path.write_text(html_doc, encoding="utf-8")
+    _atomic_write_text(path, html_doc)

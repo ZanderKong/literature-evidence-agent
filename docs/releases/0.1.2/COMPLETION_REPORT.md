@@ -1,6 +1,7 @@
 # Completion Report — v0.1.2
 
 - **Version**: v0.1.2
+- **RC tag**: v0.1.2-rc.1 (pending CI verification)
 - **Release scope**: Release engineering and documentation
 - **Base version**: v0.1.1 (`6aff4e6c`)
 

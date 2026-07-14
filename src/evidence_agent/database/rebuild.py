@@ -139,8 +139,13 @@ def _preflight_packages(
     for pkg_dir in sorted(source_dir.iterdir()):
         if not pkg_dir.is_dir():
             continue
-        pkg = _try_new_snapshot(pkg_dir, seen_ids, report)
-        if pkg is None:
+        status, pkg = _try_new_snapshot(pkg_dir, seen_ids, report)
+        if status == "INVALID":
+            raise RebuildIntegrityError(
+                f"Invalid snapshot for {pkg_dir.name}: "
+                f"new snapshot integrity check failed"
+            )
+        if status == "ABSENT":
             pkg = _try_old_structure(pkg_dir, seen_ids, report)
         if pkg is None:
             continue
@@ -156,23 +161,29 @@ def _preflight_packages(
 
 def _try_new_snapshot(
     pkg_dir: Path, seen_ids: dict[str, dict[str, str]], report: dict[str, Any],
-) -> dict[str, Any] | None:
-    """Try loading from C01 snapshot structure with full integrity check."""
+) -> tuple[str, dict[str, Any] | None]:
+    """Try loading from C01 snapshot structure with full integrity check.
+
+    Returns (status, pkg) where status is one of:
+      "VALID"   — snapshot exists and passes integrity
+      "INVALID" — snapshot exists but fails integrity (DO NOT fall back to old format)
+      "ABSENT"  — no C01 snapshot found
+    """
     current_path = pkg_dir / "state" / "current.json"
     if not current_path.exists():
-        return None
+        return ("ABSENT", None)
     cur = json.loads(current_path.read_text())
     snap_id = cur.get("snapshot_id")
     if not snap_id:
-        return None
+        return ("ABSENT", None)
     snap_dir = pkg_dir / "state" / "snapshots" / snap_id
     manifest_path = snap_dir / "manifest.json"
     if not manifest_path.exists():
-        return None
+        return ("ABSENT", None)
     manifest = json.loads(manifest_path.read_text())
     records_dir = snap_dir / "records"
     if not records_dir.exists():
-        return None
+        return ("ABSENT", None)
     source_id = manifest.get("source_id", pkg_dir.name)
 
     from evidence_agent.source_package.snapshot import check_source
@@ -180,10 +191,13 @@ def _try_new_snapshot(
     if not ck.get("valid", False):
         for e in ck.get("errors", []):
             report["errors"].append(f"{source_id}: integrity: {e}")
-        return None
+        return ("INVALID", None)
 
     _preflight_records(records_dir, source_id, seen_ids, report)
-    return {"source_id": source_id, "records_dir": records_dir, "is_new_snapshot": True}
+    return ("VALID", {
+        "source_id": source_id, "records_dir": records_dir,
+        "is_new_snapshot": True,
+    })
 
 
 def _try_old_structure(

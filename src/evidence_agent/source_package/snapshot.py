@@ -257,7 +257,7 @@ def check_source(source_id: str) -> dict[str, Any]:
     result["record_counts"] = manifest.get("record_counts", {})
 
     if result["valid"]:
-        xref_errors = _validate_cross_references(records_dir)
+        xref_errors = _validate_cross_references(records_dir, source_id)
         if xref_errors:
             result["errors"].extend(xref_errors)
             result["valid"] = False
@@ -281,7 +281,7 @@ def _find_artifact(artifacts: list[dict[str, Any]], table: str) -> dict[str, Any
     return None
 
 
-def _validate_cross_references(records_dir: Path) -> list[str]:
+def _validate_cross_references(records_dir: Path, source_id: str) -> list[str]:
     """Validate cross-table references in a snapshot."""
     errors: list[str] = []
 
@@ -303,6 +303,7 @@ def _validate_cross_references(records_dir: Path) -> list[str]:
     run_ids = {r["run_id"] for r in runs}
     entity_ids = {e["entity_id"] for e in entities}
     batch_ids = {b["review_batch_id"] for b in batches}
+    row_by_id = {br["review_row_id"]: br for br in batch_rows}
 
     for c in claims:
         if c.get("source_id") not in source_ids:
@@ -319,13 +320,22 @@ def _validate_cross_references(records_dir: Path) -> list[str]:
         if r.get("source_id") not in source_ids:
             errors.append(f"run {r['run_id']}: source_id not in sources")
         if r.get("task_id") and r["task_id"] not in task_ids:
-            pass
+            errors.append(f"run {r['run_id']}: task_id {r['task_id']} not in tasks")
 
     for el in entity_links:
         if el.get("claim_id") not in claim_ids:
             errors.append(f"link {el.get('link_id','')}: claim_id not in claims")
         if el.get("entity_id") not in entity_ids:
             errors.append(f"link {el.get('link_id','')}: entity_id not in entities")
+
+    for b in batches:
+        if b.get("run_id") and b["run_id"] not in run_ids:
+            errors.append(f"batch {b['review_batch_id']}: run_id {b['run_id']} not in runs")
+        if b.get("source_id") != source_id:
+            errors.append(
+                f"batch {b['review_batch_id']}: source_id mismatch: "
+                f"{b.get('source_id')} != {source_id}"
+            )
 
     for br in batch_rows:
         if br.get("review_batch_id") not in batch_ids:
@@ -338,6 +348,26 @@ def _validate_cross_references(records_dir: Path) -> list[str]:
             errors.append(f"decision {d['review_id']}: batch_id not in batches")
         if d.get("object_id") and d["object_id"] not in claim_ids:
             errors.append(f"decision {d['review_id']}: object_id not in claims")
+        row_id = d.get("review_row_id")
+        if row_id:
+            if row_id not in row_by_id:
+                errors.append(
+                    f"decision {d['review_id']}: review_row_id {row_id} not in rows"
+                )
+            else:
+                br = row_by_id[row_id]
+                bid = d.get("review_batch_id")
+                if bid and br.get("review_batch_id") != bid:
+                    errors.append(
+                        f"decision {d['review_id']}: row belongs to batch "
+                        f"{br.get('review_batch_id')}, not {bid}"
+                    )
+                obj = d.get("object_id")
+                if obj and br.get("claim_id") != obj:
+                    errors.append(
+                        f"decision {d['review_id']}: row.claim_id "
+                        f"{br.get('claim_id')} != object_id {obj}"
+                    )
 
     for v in revisions:
         if v.get("claim_id") not in claim_ids:

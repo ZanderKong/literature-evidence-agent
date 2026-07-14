@@ -263,6 +263,108 @@ class TestRebuildIdentity:
             f"from the package at all."
         )
 
+    def test_tampered_new_snapshot_must_not_fallback(self, rebuild_ctx):
+        """Tampered new snapshot must NOT fall back to old-format import.
+        Rebuild must raise RebuildIntegrityError and target DB must be untouched."""
+        from evidence_agent.database.migrations import migrate
+        from evidence_agent.database.rebuild import (
+            RebuildIntegrityError, rebuild_from_packages,
+        )
+        from evidence_agent.source_package.snapshot import sync_source
+
+        ctx = rebuild_ctx
+
+        migrate()
+        src_dir = ctx.sources_dir / "SRC-test004"
+        src_dir.mkdir(parents=True, exist_ok=True)
+
+        manifest = {
+            "source_id": "SRC-test004",
+            "source_type": "journal_article",
+            "title": "Test",
+            "original_file_sha256": "jkl012",
+            "created_at": "2025-01-01T00:00:00",
+            "updated_at": "2025-01-01T00:00:00",
+        }
+        (src_dir / "manifest.json").write_text(json.dumps(manifest))
+
+        claims = [
+            {
+                "_claim_id": "CLM-test004",
+                "claim_id": "CLM-test004",
+                "claim_type": "reported_result",
+                "source_quote": "Test",
+                "faithful_paraphrase": "Test",
+                "evidence_basis_description": "Test",
+                "locator_hint": {"page": 1},
+                "page": 1,
+                "created_by_run_id": "RUN-test004",
+                "created_at": "2025-01-01T00:00:00",
+                "updated_at": "2025-01-01T00:00:00",
+            }
+        ]
+        analysis_dir = src_dir / "analysis"
+        analysis_dir.mkdir(exist_ok=True)
+        _save_jsonl(claims, analysis_dir / "claims.persisted.jsonl")
+
+        from evidence_agent.database.connection import get_connection
+        with get_connection() as conn:
+            conn.execute(
+                "INSERT INTO sources (source_id, source_type, title, "
+                "original_file_sha256, origin_scope, "
+                "scientific_verification_status, created_at, updated_at) "
+                "VALUES ('SRC-test004', 'journal_article', 'Test', "
+                "'jkl012', 'external', 'unverified', "
+                "'2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+            )
+            conn.execute(
+                "INSERT INTO processing_runs (run_id, source_id, module_name, "
+                "model_name, input_hash, status, started_at) "
+                "VALUES ('RUN-test004', 'SRC-test004', 'analyse', 'mock', "
+                "'hash:jkl', 'completed', '2025-01-01T00:00:00')"
+            )
+            conn.execute(
+                "INSERT INTO source_claims (claim_id, source_id, claim_type, "
+                "source_quote, faithful_paraphrase, evidence_basis_description, "
+                "origin_scope, record_review_status, "
+                "scientific_verification_status, quote_match_status, "
+                "created_by_run_id, created_at, updated_at) "
+                "VALUES ('CLM-test004', 'SRC-test004', 'reported_result', "
+                "'Test', 'Test', 'Test', "
+                "'external', 'pending', 'unverified', "
+                "'exact', 'RUN-test004', "
+                "'2025-01-01T00:00:00', '2025-01-01T00:00:00')"
+            )
+            conn.execute(
+                "INSERT INTO claim_locators (locator_id, claim_id, page, "
+                "locator_confidence) VALUES ('LOC-test004', 'CLM-test004', 1, 'high')"
+            )
+
+        sync_source("SRC-test004")
+
+        snap_dir = (src_dir / "state" / "snapshots")
+        current = json.loads((src_dir / "state" / "current.json").read_text())
+        sd = snap_dir / current["snapshot_id"]
+        claims_file = sd / "records" / "source_claims.jsonl"
+        tampered = claims_file.read_text().replace("claim_id", "broken_id")
+        claims_file.write_text(tampered)
+
+        target_db = ctx.workspace_path / "rebuilt_no_fallback.sqlite"
+        target_db.write_text("")
+        original_size = target_db.stat().st_size
+
+        try:
+            rebuild_from_packages(
+                source_dir=ctx.sources_dir, target_db=target_db, replace=True,
+            )
+            assert False, "Expected RebuildIntegrityError but no exception raised"
+        except RebuildIntegrityError:
+            pass
+
+        assert target_db.stat().st_size == original_size, (
+            "Target DB must not be modified when new snapshot is invalid"
+        )
+
 
 def _save_jsonl(items, path):
     path.parent.mkdir(parents=True, exist_ok=True)

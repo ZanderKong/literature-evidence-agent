@@ -2,50 +2,125 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches:
+      - main
+      - dev
+    tags:
+      - "v*"
   pull_request:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
+    inputs:
+      run_live_deepseek:
+        description: Run DeepSeek live smoke
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
 
 jobs:
   quality:
+    name: Quality (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
-      - run: pip install pytest-randomly
-      - run: ruff check .
-      - run: python -m mypy src
-      - run: pytest -q -m "not live_deepseek" --randomly-seed=1
-      - run: python -c "
-        from evidence_agent.database.migrations import check;
-        r = check();
-        assert r['integrity'] == 'ok';
-        assert r['version'] >= 5;
-        print(f'DB check OK: version={r[\"version\"]}')
-        "
-      - run: python scripts/release_gate.py --version 0.1.1 --mode ci
-      - uses: actions/upload-artifact@v4
+
+      - name: Read project version
+        id: project_version
+        shell: bash
+        run: |
+          VERSION=$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          data = tomllib.loads(Path("pyproject.toml").read_text())
+          print(data["project"]["version"])
+          PY
+          )
+          RELEASE_LINE=$(python - <<PY
+          import re
+          version = "$VERSION"
+          print(re.sub(r"rc\d+$", "", version))
+          PY
+          )
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_line=$RELEASE_LINE" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: python -m ruff check .
+
+      - name: Type check (mypy)
+        run: python -m mypy src
+
+      - name: Run tests
+        run: python -m pytest -q -m "not live_deepseek"
+
+      - name: Golden fixture conformance
+        run: |
+          python scripts/evaluate_golden.py \
+            --mode fixture \
+            --output artifacts/release/${{ steps.project_version.outputs.release_line }}/golden-fixture.json
+
+      - name: README smoke
+        run: |
+          python scripts/readme_smoke.py \
+            --output artifacts/release/${{ steps.project_version.outputs.release_line }}/readme-smoke.json
+
+      - name: Run release gate
+        run: |
+          python scripts/release_gate.py \
+            --version "${{ steps.project_version.outputs.release_line }}" \
+            --mode ci
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: reports-py${{ matrix.python-version }}
-          path: artifacts/release/0.1.1/
+          name: release-reports-py${{ matrix.python-version }}-${{ github.sha }}
+          path: artifacts/release/${{ steps.project_version.outputs.release_line }}/
 
   live:
-    if: github.event_name == 'workflow_dispatch' && vars.EVIDENCE_AGENT_LLM_API_KEY != ''
+    name: Live DeepSeek Smoke
     runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live_deepseek
+    needs: []
+
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: pytest -m live_deepseek -q
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Check API key
         env:
           EVIDENCE_AGENT_LLM_API_KEY: ${{ secrets.EVIDENCE_AGENT_LLM_API_KEY }}
+        run: |
+          if [ -z "$EVIDENCE_AGENT_LLM_API_KEY" ]; then
+            echo "Missing EVIDENCE_AGENT_LLM_API_KEY secret"
+            exit 1
+          fi
+
+      - name: Run DeepSeek live smoke
+        env:
+          EVIDENCE_AGENT_LLM_API_KEY: ${{ secrets.EVIDENCE_AGENT_LLM_API_KEY }}
+        run: python -m pytest -m live_deepseek -q

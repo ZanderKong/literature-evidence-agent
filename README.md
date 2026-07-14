@@ -1,5 +1,7 @@
 # Literature Evidence Agent
 
+**Stable version**: v0.1.2 | **Current candidate**: v0.1.3-rc.1
+
 从 PDF 文献中提取作者主张、人工复核、全文检索的证据管理系统。
 
 ## v0.1.2 能力

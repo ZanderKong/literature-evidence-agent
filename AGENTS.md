@@ -3,6 +3,7 @@
 ## Current Version Info
 
 Current stable version: v0.1.2
+Current development candidate: v0.1.3-rc.1
 Current stable branch: main
 Current development branch: dev
 Next planned release: v0.1.3

@@ -21,4 +21,4 @@ def test_short_version_flag():
 
 def test_version_string():
     v = get_version()
-    assert "0.1" in v, f"Expected 0.1.x, got {v}"
+    assert "0.1.3" in v, f"Expected 0.1.3.x, got {v}"

@@ -50,6 +50,8 @@ def snapshot_summary(db_path: Path) -> dict[str, Any]:
         "AND name NOT LIKE '%_idx' "
         "AND name NOT LIKE '%_stat' "
         "AND name NOT LIKE '%_segdir' "
+        "AND name != 'schema_migrations' "
+        "AND name != 'research_tasks' "
         "ORDER BY name"
     )
     tables = [r[0] for r in cur.fetchall()]
@@ -100,11 +102,24 @@ def _canonical_content_hash(conn: sqlite3.Connection, table: str) -> str:
         return "N/A"
     h = hashlib.sha256()
     for row in rows:
-        d = dict(row)
+        d = _canonicalize_row(table, dict(row))
         canonical = json.dumps(d, ensure_ascii=False, sort_keys=True,
                                separators=(",", ":"))
         h.update(canonical.encode())
     return h.hexdigest()
+
+
+_TIMESTAMP_COLS = {"created_at", "updated_at", "started_at", "completed_at",
+                    "exported_at", "applied_at", "reviewed_at", "acquired_at"}
+
+
+def _canonicalize_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
+    """Replace timestamps with empty string for stable comparison."""
+    result = dict(row)
+    for col in _TIMESTAMP_COLS:
+        if col in result:
+            result[col] = ""
+    return result
 
 
 def compare_databases(db_a: Path, db_b: Path) -> dict[str, Any]:

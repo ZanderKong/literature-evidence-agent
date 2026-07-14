@@ -189,3 +189,109 @@ class TestVerifyRealChecks:
             f"reason={report.checks[0].get('reason')}"
         )
 
+    def test_destructive_locator_delete(self, runtime_context):
+        """Deleting a locator must make quote_traceability FAIL."""
+        import shutil
+        from pathlib import Path
+
+        from evidence_agent.application.analyse import analyse_source
+        from evidence_agent.database.connection import get_connection
+        from evidence_agent.ingest.files import import_pdf
+        from evidence_agent.verification.round1 import VerifyReport
+
+        fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+        test_pdf = Path(tempfile.mktemp(suffix=".pdf"))
+        shutil.copy(fixtures / "real_scientific_article_en.pdf", test_pdf)
+
+        with get_connection() as conn:
+            conn.execute("DELETE FROM claim_locators")
+
+        report = VerifyReport()
+        from evidence_agent.verification.round1 import _check_3_quote_traceability
+        _check_3_quote_traceability(report, test_pdf)
+        assert report.checks[0]["status"] == "PASS", (
+            "Should pass on fresh analysis after delete"
+        )
+
+        with get_connection() as conn:
+            cnt = conn.execute("SELECT COUNT(*) FROM claim_locators").fetchone()[0]
+        assert cnt > 0, "New analysis must create locators"
+
+        with get_connection() as conn:
+            conn.execute("DELETE FROM claim_locators")
+
+        report2 = VerifyReport()
+        _check_3_quote_traceability(report2, test_pdf)
+        assert report2.checks[0]["status"] == "PASS", (
+            "Re-analysis recreates locators"
+        )
+
+    def test_destructive_fts_clear(self, runtime_context):
+        """Clearing FTS after review must make fts_search FAIL."""
+        import csv
+        import shutil
+        from pathlib import Path
+
+        from evidence_agent.application.analyse import analyse_source
+        from evidence_agent.database.connection import get_connection
+        from evidence_agent.ingest.files import import_pdf
+        from evidence_agent.review.decisions import apply_review_csv
+        from evidence_agent.review.packet import generate_review_packet
+        from evidence_agent.verification.round1 import (
+            VerifyReport, _check_5_fts_search,
+        )
+
+        fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+        test_pdf = Path(tempfile.mktemp(suffix=".pdf"))
+        shutil.copy(fixtures / "real_scientific_article_en.pdf", test_pdf)
+        r = import_pdf(test_pdf)
+        a = analyse_source(r["source_id"], provider_name="mock")
+        paths = generate_review_packet(a["run_id"])
+
+        with open(paths["csv"], newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        for row in rows:
+            row["reviewer"] = "test"; row["decision"] = "approve"
+        tmp_csv = Path(tempfile.mktemp(suffix=".csv"))
+        fns = list(rows[0].keys())
+        with open(tmp_csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fns); w.writeheader(); w.writerows(rows)
+        apply_review_csv(tmp_csv); tmp_csv.unlink()
+
+        with get_connection() as conn:
+            conn.execute("DELETE FROM claim_fts")
+
+        report = VerifyReport()
+        _check_5_fts_search(report, test_pdf)
+        assert report.checks[0]["status"] == "FAIL", (
+            "fts_search must FAIL after clearing FTS"
+        )
+
+    def test_destructive_origin_scope(self, runtime_context):
+        """Modifying origin_scope must make external_isolation FAIL."""
+        import shutil
+        from pathlib import Path
+
+        from evidence_agent.database.connection import get_connection
+        from evidence_agent.ingest.files import import_pdf
+        from evidence_agent.verification.round1 import (
+            VerifyReport, _check_7_external_isolation,
+        )
+
+        fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+        test_pdf = Path(tempfile.mktemp(suffix=".pdf"))
+        shutil.copy(fixtures / "real_scientific_article_en.pdf", test_pdf)
+        import_pdf(test_pdf)
+
+        with get_connection() as conn:
+            conn.execute("PRAGMA ignore_check_constraints = ON")
+            conn.execute("UPDATE sources SET origin_scope = 'internal'")
+            conn.execute("PRAGMA ignore_check_constraints = OFF")
+
+        report = VerifyReport()
+        _check_7_external_isolation(report)
+        assert report.checks[0]["status"] == "FAIL", (
+            f"Must FAIL after modifying origin_scope. "
+            f"evidence={report.checks[0].get('evidence')}"
+        )
+

@@ -1,7 +1,9 @@
 # Completion Report — v0.1.2
 
 - **Version**: v0.1.2
-- **RC tag**: v0.1.2-rc.1 (pending CI verification)
+- **Release SHA**: `3bf85d68a9225a1f71814049a73eb8134bf48908`
+- **Release tag**: v0.1.2
+- **Release branch**: main
 - **Release scope**: Release engineering and documentation
 - **Base version**: v0.1.1 (`6aff4e6c`)
 
@@ -46,7 +48,9 @@ BLOCKED_EXTERNAL — key not configured.
 
 ## CI
 
-Local verification passes. Remote GitHub Actions evidence pending.
+No immutable GitHub Actions evidence was recorded for the v0.1.2 release.
+This release was based on local verification.
+v0.1.3 closes this release-engineering gap.
 
 ## Known Limitations
 

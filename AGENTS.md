@@ -1,11 +1,11 @@
 # AGENTS.md — Literature Evidence Agent
 
-## Current Version: v0.1.1 (stable) / v0.1.2 (next)
+## Current Version Info
 
-Current stable version: v0.1.1
+Current stable version: v0.1.2
 Current stable branch: main
 Current development branch: dev
-Next release target: v0.1.2
+Next planned release: v0.1.3
 
 See `docs/releases/` for release documentation.
 See `docs/VERSIONING_AND_BRANCHING.md` for version and branch policy.

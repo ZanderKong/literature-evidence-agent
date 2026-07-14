@@ -1,6 +1,14 @@
 # Changelog
 
-## v0.1.2 (next)
+## v0.1.3 (unreleased)
+
+- Documentation and release-evidence reconciliation
+- Dynamic CI release version detection
+- Tag-triggered CI
+- GitHub Actions evidence capture
+- README smoke documentation
+
+## v0.1.2 — 2026-07-14
 
 - Release engineering and documentation: no core behavior changes
 - Deterministic offline golden evaluation (fixture + pipeline-smoke modes)

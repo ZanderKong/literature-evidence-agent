@@ -2,7 +2,7 @@
 
 从 PDF 文献中提取作者主张、人工复核、全文检索的证据管理系统。
 
-## Round 1.1 能力
+## v0.1.2 能力
 
 - ✅ 本地 PDF 导入与重复识别（SHA-256）
 - ✅ PDF 文本解析、页码映射、章节识别
@@ -84,8 +84,35 @@ src/evidence_agent/
 ```bash
 ruff check .          # Lint
 python -m mypy src    # Type check
-pytest -q             # 122 tests
+python -m pytest -q   # Tests
 ```
+
+## 验证与发布
+
+```bash
+python scripts/evaluate_golden.py \
+  --mode fixture \
+  --output artifacts/golden/fixture.json
+
+python scripts/evaluate_golden.py \
+  --mode pipeline-smoke \
+  --output artifacts/golden/pipeline-smoke.json
+
+python scripts/readme_smoke.py \
+  --output artifacts/readme-smoke.json
+
+python scripts/release_gate.py \
+  --version 0.1.2 \
+  --mode release
+```
+
+Golden fixture 用于验证 evaluator 和固定标注的一致性。Golden pipeline-smoke 使用 Mock provider 验证离线处理链。两者都不代表 DeepSeek 真实模型质量。
+
+## 当前限制
+
+- 扫描 PDF 暂无 OCR fallback
+- 图表和显微图暂无多模态理解
+- DeepSeek live smoke 需要外部 API Key
 
 ## 外部数据安全
 

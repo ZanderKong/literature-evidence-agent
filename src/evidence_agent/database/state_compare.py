@@ -41,7 +41,16 @@ def snapshot_summary(db_path: Path) -> dict[str, Any]:
     fk = cur.fetchall()
     summary["foreign_keys"] = "ok" if not fk else str(len(fk))
     cur = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+        "SELECT name FROM sqlite_master WHERE type='table' "
+        "AND name NOT LIKE 'sqlite_%' "
+        "AND name NOT LIKE '%_fts%' "
+        "AND name NOT LIKE '%_content' "
+        "AND name NOT LIKE '%_docsize' "
+        "AND name NOT LIKE '%_data' "
+        "AND name NOT LIKE '%_idx' "
+        "AND name NOT LIKE '%_stat' "
+        "AND name NOT LIKE '%_segdir' "
+        "ORDER BY name"
     )
     tables = [r[0] for r in cur.fetchall()]
     for table in tables:

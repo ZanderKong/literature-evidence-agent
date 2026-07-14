@@ -5,6 +5,7 @@ These tests confirm the new implementation doesn't have the old flaws
 (table existence, COUNT >= 0, migration version only).
 """
 
+import tempfile
 
 
 class TestVerifyRealChecks:
@@ -113,3 +114,78 @@ class TestVerifyRealChecks:
         assert "bad_sources=" in iso_check.get("evidence", ""), (
             f"Evidence should show bad_sources count. Got: {iso_check.get('evidence', '')}"
         )
+
+    def test_verify_restores_caller_context(self, runtime_context):
+        """Verify must restore the caller's RuntimeContext after completion."""
+        import shutil
+        from pathlib import Path
+
+        from evidence_agent.runtime import get_current_context as gcc
+        from evidence_agent.verification.round1 import run_round1_verification
+
+        caller_ctx_before = gcc()
+        fixtures = Path(__file__).resolve().parent.parent / "fixtures" / "sample_article.pdf"
+        test_pdf = Path(tempfile.mktemp(suffix=".pdf"))
+        if fixtures.exists():
+            shutil.copy(fixtures, test_pdf)
+
+        report = run_round1_verification(
+            pdf_path=test_pdf,
+            workspace=Path(tempfile.mkdtemp()),
+        )
+        caller_ctx_after = gcc()
+
+        assert caller_ctx_after.db_path == caller_ctx_before.db_path, (
+            "Verify must not mutate caller's RuntimeContext db_path"
+        )
+        assert caller_ctx_after.workspace_path == caller_ctx_before.workspace_path, (
+            "Verify must not mutate caller's workspace"
+        )
+
+    def test_database_rebuild_runs_full_cycle(self, runtime_context):
+        """database_rebuild must do full sync→check→rebuild→compare."""
+        import csv
+        import shutil
+        import tempfile as tmpf
+        from pathlib import Path
+
+        from evidence_agent.application.analyse import analyse_source
+        from evidence_agent.ingest.files import import_pdf
+        from evidence_agent.review.decisions import apply_review_csv
+        from evidence_agent.review.packet import generate_review_packet
+        from evidence_agent.verification.round1 import VerifyReport, _check_6_database_rebuild
+
+        fixtures = Path(__file__).resolve().parent.parent / "fixtures"
+        test_pdf = Path(tmpf.mktemp(suffix=".pdf"))
+        shutil.copy(fixtures / "real_scientific_article_en.pdf", test_pdf)
+        r = import_pdf(test_pdf)
+        analysis = analyse_source(r["source_id"], provider_name="mock")
+        paths = generate_review_packet(analysis["run_id"])
+
+        with open(paths["csv"], newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        for i, row in enumerate(rows):
+            row["reviewer"] = "test"
+            if i == 0:
+                row["decision"] = "approve"
+            else:
+                row["decision"] = "reject"
+        tmp_csv = Path(tmpf.mktemp(suffix=".csv"))
+        fns = list(rows[0].keys())
+        with open(tmp_csv, "w", newline="", encoding="utf-8") as f:
+            w = csv.DictWriter(f, fieldnames=fns)
+            w.writeheader()
+            w.writerows(rows)
+        apply_review_csv(tmp_csv)
+        tmp_csv.unlink()
+
+        report = VerifyReport()
+        _check_6_database_rebuild(report)
+
+        assert len(report.checks) == 1, f"Expected 1 check, got: {report.to_dict()}"
+        assert report.checks[0]["status"] == "PASS", (
+            f"Full rebuild cycle must PASS. "
+            f"evidence={report.checks[0].get('evidence')} "
+            f"reason={report.checks[0].get('reason')}"
+        )
+

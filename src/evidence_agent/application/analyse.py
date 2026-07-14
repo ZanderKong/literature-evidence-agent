@@ -5,6 +5,7 @@ Orchestrates the full analysis pipeline:
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ from evidence_agent.ids import (
 )
 from evidence_agent.runtime import RuntimeContext, get_current_context
 from evidence_agent.validators.quote import validate_claims
+
+logger = logging.getLogger(__name__)
 
 
 def _detect_code_commit() -> str:
@@ -347,8 +350,12 @@ def analyse_source(
             try:
                 from evidence_agent.database.repositories import update_task_status
                 update_task_status(task_id, "failed")
-            except Exception:
-                pass
+            except Exception as _task_exc:
+                logger.warning(
+                    "Failed to update task status after analyse failure: "
+                    "task_id=%s source_id=%s error=%s",
+                    task_id, source_id, type(_task_exc).__name__,
+                )
         raise
 
 

@@ -1,8 +1,13 @@
 # AGENTS.md — Literature Evidence Agent
 
-## Current Version: v0.1.1
+## Current Version: v0.1.1 (stable) / v0.1.2 (next)
 
-See `docs/releases/0.1.1/` for release documentation.
+Current stable version: v0.1.1
+Current stable branch: main
+Current development branch: dev
+Next release target: v0.1.2
+
+See `docs/releases/` for release documentation.
 See `docs/VERSIONING_AND_BRANCHING.md` for version and branch policy.
 
 ## Branching Rules
@@ -18,16 +23,11 @@ See `docs/VERSIONING_AND_BRANCHING.md` for version and branch policy.
 9. 禁止 force-push `main`。
 10. Release Gate 非 PASS 时禁止 tag。
 11. 历史 tag 不得移动或覆盖。
+12. 不得创建临时 fix/feat/release 分支。
 
-## 当前唯一工作分支
+## 当前范围：v0.1.x 修补
 
-fix/round1.1-rc2-hardening
-
-禁止建立额外 coding/review 分支。Review 使用固定 tag。每个 FIX 更新 execution log。
-
-## 当前范围：Round 1.1 RC2
-
-Round 1.1 RC2 完成完整闭环：
+v0.1.x 完成完整闭环：
 ```
 本地 PDF 导入 → 解析 → 主张提取 → 人工复核 → SQLite 数据库 → 检索导出
 → Package Snapshot → 精确 Rebuild → DB Compare → Verify → Golden Set
@@ -35,7 +35,7 @@ Round 1.1 RC2 完成完整闭环：
 
 ## 必须遵守的规则
 
-1. **运行测试** — 每次修改后运行 `.venv/bin/pytest -q`
+1. **运行测试** — 每次修改后运行 `python -m pytest -q`
 2. **外部数据隔离** — 所有来源表 origin_scope 固定为 "external"
 3. **科学验证状态** — 第一轮只能写入 "unverified"
 4. **禁止扩大范围** — 不接入在线检索、OCR、向量数据库、Web UI、多 Agent
@@ -57,11 +57,11 @@ pip install -e ".[dev]"
 ## 关键命令
 
 ```bash
-.venv/bin/evidence-agent --help
-.venv/bin/evidence-agent init
-.venv/bin/evidence-agent db migrate
-.venv/bin/evidence-agent db check
-.venv/bin/pytest -q
-.venv/bin/python -m ruff check .
-.venv/bin/python -m mypy src
+evidence-agent --help
+evidence-agent init
+evidence-agent db migrate
+evidence-agent db check
+python -m pytest -q
+python -m ruff check .
+python -m mypy src
 ```

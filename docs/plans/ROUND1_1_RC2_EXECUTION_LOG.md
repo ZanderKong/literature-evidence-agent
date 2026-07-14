@@ -1,3 +1,4 @@
+Historical document. Superseded by docs/releases/. Do not use legacy branch names.
 # Round 1.1 RC2 Execution Log
 
 ## PREP 00: 冻结基线

@@ -123,7 +123,15 @@ class TestContextIsolation:
         # Insert into A only
         import sqlite3
         conn_a = sqlite3.connect(str(ctx_a.db_path))
-        conn_a.execute("INSERT INTO sources (source_id,source_type,title,authors_json,original_file_sha256,origin_scope,scientific_verification_status,created_at,updated_at) VALUES ('SRC-A','journal_article','A','[]','sha:a','external','unverified','2025-01-01T00:00:00','2025-01-01T00:00:00')")
+        conn_a.execute(
+            "INSERT INTO sources "
+            "(source_id,source_type,title,authors_json,"
+            "original_file_sha256,origin_scope,"
+            "scientific_verification_status,created_at,updated_at) "
+            "VALUES ('SRC-A','journal_article','A','[]','sha:a',"
+            "'external','unverified',"
+            "'2025-01-01T00:00:00','2025-01-01T00:00:00')"
+        )
         conn_a.commit()
         conn_a.close()
 

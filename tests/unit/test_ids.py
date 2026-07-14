@@ -48,7 +48,7 @@ class TestIdGeneration:
     def test_no_collisions_100k(self):
         """Generate 100000 IDs with no duplicates."""
         ids: set[str] = set()
-        for i in range(100000):
+        for _ in range(100000):
             ids.add(generate_claim_id())
         assert len(ids) == 100000
 

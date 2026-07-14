@@ -29,13 +29,7 @@ The single source of truth for the version string is `pyproject.toml` under `[pr
 - **`main`** — Only contains reviewed, release-gated stable versions. Never force-pushed. Never rebased after publication.
 - **`dev`** — Active development branch. All features, fixes, and enhancements land here first.
 
-### Working Branches
-- Named as `fix/description` or `feat/description`
-- Ephemeral — deleted after merge to `dev` or `main`
-- No review-only branches besides long-lived branches
-
 ### Merge Rules
-- `fix/*` → `dev`: fast-forward or squash, depending on commit quality
 - `dev` → `main`: `git merge --no-ff dev -m "release: merge version X.Y.Z"`
 - Never: `git push --force origin main`
 - Never: `git reset --hard` on `main` or published branches
@@ -67,8 +61,8 @@ The following tags are preserved for audit trail. They will never be moved, rena
 
 ## Hotfix
 
-1. Branch from `main`: `git switch -c fix/hotfix-X main`
-2. Fix, test, review
-3. Merge to `main`: `git merge --no-ff fix/hotfix-X`
-4. Tag `vX.Y.Z+1`
-5. Merge `main` back to `dev`: `git switch dev && git merge main`
+1. Fix on `dev`, run targeted tests
+2. Release Gate must PASS
+3. Merge `dev` to `main` with `--no-ff`
+4. Tag patch version on `main`
+5. Fast-forward `dev` to `main`

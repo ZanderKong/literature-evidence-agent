@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Release gate — machine-enforced quality checks for v0.1.x releases.
-
-Usage:
-    python scripts/release_gate.py --version 0.1.1 --mode local
-    python scripts/release_gate.py --version 0.1.1 --mode ci
-    python scripts/release_gate.py --version 0.1.1 --mode release
-"""
+"""Release gate — machine-enforced quality checks for v0.1.x releases."""
 
 import argparse
 import json
@@ -16,168 +10,225 @@ import time
 from pathlib import Path
 from typing import Any
 
-
 ARTIFACTS_DIR = Path("artifacts/release")
 
 
-def run(cmd: list[str], output_file: Path | None = None, timeout: int = 300) -> int:
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+def run(cmd: list[str], output_file: Path | None = None,
+        timeout: int = 300) -> tuple[int, str]:
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if output_file:
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+            output_file.write_text("TIMEOUT")
+        return (-1, "TIMEOUT")
+    output = result.stdout + "\n" + result.stderr
     if output_file:
         output_file.parent.mkdir(parents=True, exist_ok=True)
-        output_file.write_text(result.stdout + "\n" + result.stderr)
-    return result.returncode
+        output_file.write_text(output)
+    return (result.returncode, output)
 
 
 def run_gate(version: str, mode: str) -> dict[str, Any]:
+    out_dir = ARTIFACTS_DIR / version
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     report: dict[str, Any] = {
         "version": version,
         "mode": mode,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "checks": [],
-        "result": "PENDING",
+        "checks": [], "result": "PENDING",
     }
-    out_dir = ARTIFACTS_DIR / version
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    def add_check(name: str, passed: bool, evidence: str = "") -> None:
+    # Git identity
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"],
+                             capture_output=True, text=True).stdout.strip()
+        branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                                capture_output=True, text=True).stdout.strip()
+        dirty = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True,
+        ).stdout.strip() != ""
+        report["git"] = {"branch": branch, "sha": sha, "dirty": dirty}
+    except Exception:
+        report["git"] = {"error": "git_unavailable"}
+
+    def add(name: str, passed: bool, evidence: str = "",
+            exit_code: int = 0, duration: float = 0) -> None:
         report["checks"].append({
             "name": name, "status": "PASS" if passed else "FAIL",
+            "exit_code": exit_code, "duration_seconds": round(duration, 1),
             "evidence": evidence[:300],
         })
-        print(f"  {'PASS' if passed else 'FAIL'}  {name}")
 
-    # 1. Git status
-    r = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True)
-    clean = r.stdout.strip() == "" or mode != "release"
-    add_check("git_clean", clean, r.stdout.strip()[:200] if not clean else "clean")
+    # Git clean (release mode only)
+    if mode == "release" and report.get("git", {}).get("dirty", False):
+        add("git_clean", False, "Dirty workspace")
+        report["result"] = "FAIL"
+        _write_reports(out_dir, report)
+        return report
+    add("git_clean", True, "clean")
 
-    # 2. Ruff
-    rc = run(["python", "-m", "ruff", "check", "."], out_dir / "ruff.txt")
-    add_check("ruff", rc == 0, f"exit={rc}")
+    # Ruff
+    t0 = time.time()
+    rc, _ = run(["python", "-m", "ruff", "check", "."], out_dir / "ruff.txt")
+    add("ruff", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 3. Mypy
-    rc = run(["python", "-m", "mypy", "src"], out_dir / "mypy.txt")
-    add_check("mypy", rc == 0, f"exit={rc}")
+    # Mypy
+    t0 = time.time()
+    rc, _ = run(["python", "-m", "mypy", "src"], out_dir / "mypy.txt")
+    add("mypy", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 4-6. Pytest 3x
+    # Pytest 3x
     for i in range(1, 4):
-        rc = run(
+        t0 = time.time()
+        rc, _ = run(
             ["pytest", "-q", "-m", "not live_deepseek"],
             out_dir / f"pytest-run-{i}.txt",
         )
-        add_check(f"pytest_run_{i}", rc == 0, f"exit={rc}")
+        add(f"pytest_{i}", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 7-9. Random seeds
+    # Random seeds
     for seed in [1, 2, 3]:
-        rc = run(
-            ["pytest", "-q", "--randomly-seed", str(seed), "-m", "not live_deepseek"],
+        t0 = time.time()
+        rc, _ = run(
+            ["pytest", "-q", "--randomly-seed", str(seed),
+             "-m", "not live_deepseek"],
             out_dir / f"pytest-seed-{seed}.txt",
         )
-        add_check(f"random_seed_{seed}", rc == 0, f"exit={rc}")
+        add(f"seed_{seed}", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 10. Verify
-    rc = run(
+    # Golden fixture conformance
+    t0 = time.time()
+    rc, _ = run(
+        ["python", "scripts/evaluate_golden.py", "--mode", "fixture",
+         "--output", str(out_dir / "golden-fixture.json")],
+        out_dir / "golden-fixture.txt",
+    )
+    gfd = {}
+    try:
+        gfd = json.loads((out_dir / "golden-fixture.json").read_text())
+    except Exception:
+        pass
+    add("golden_fixture", rc == 0,
+        f"exit={rc} pass={gfd.get('all_thresholds_pass')}", rc, time.time() - t0)
+
+    # Golden pipeline smoke
+    t0 = time.time()
+    rc, _ = run(
+        ["python", "scripts/evaluate_golden.py", "--mode", "pipeline-smoke",
+         "--output", str(out_dir / "golden-pipeline-smoke.json")],
+        out_dir / "golden-pipeline-smoke.txt",
+    )
+    gps = {}
+    try:
+        gps = json.loads((out_dir / "golden-pipeline-smoke.json").read_text())
+    except Exception:
+        pass
+    add("golden_smoke", rc == 0,
+        f"exit={rc} result={gps.get('result')}", rc, time.time() - t0)
+
+    # README smoke
+    t0 = time.time()
+    rc, _ = run(
+        ["python", "scripts/readme_smoke.py",
+         "--output", str(out_dir / "readme-smoke.json")],
+        out_dir / "readme-smoke.txt",
+    )
+    rs = {}
+    try:
+        rs = json.loads((out_dir / "readme-smoke.json").read_text())
+    except Exception:
+        pass
+    add("readme_smoke", rc == 0,
+        f"exit={rc} result={rs.get('result')}", rc, time.time() - t0)
+
+    # Verify
+    t0 = time.time()
+    rc, _ = run(
         ["evidence-agent", "verify", "--round-name", "round1"],
         out_dir / "verify.txt",
     )
-    try:
-        vdata = json.loads((out_dir / "verify.txt").read_text()) if rc == 0 else {}
-    except Exception:
-        vdata = {}
-    add_check("verify", rc == 0, vdata.get("result", "FAIL") if vdata else f"exit={rc}")
+    add("verify", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 11. Golden
-    from tests.golden.evaluator import evaluate_golden
-    from evidence_agent.database.connection import get_connection
-    with get_connection(read_only=True) as conn:
-        rows = conn.execute(
-            "SELECT * FROM source_claims "
-            "WHERE record_review_status = 'approved' LIMIT 50"
-        ).fetchall()
-    claims = [dict(r) for r in rows]
-    golden_result = evaluate_golden(claims)
-    (out_dir / "golden.json").write_text(
-        json.dumps(golden_result, indent=2, ensure_ascii=False),
-    )
-    add_check("golden", golden_result.get("all_thresholds_pass", False),
-              f"recall={golden_result.get('recall')}% pass={golden_result.get('all_thresholds_pass')}")
-
-    # 12. CLI E2E
-    rc = run(
+    # CLI E2E
+    t0 = time.time()
+    rc, _ = run(
         ["pytest", "tests/e2e/test_cli_round1_rc2.py", "-q"],
         out_dir / "cli_e2e.txt",
     )
-    add_check("cli_e2e", rc == 0, f"exit={rc}")
+    add("cli_e2e", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 13. Snapshot/Rebuild
-    rc = run(
-        ["pytest", "tests/integration/test_package_snapshot.py",
+    # Snapshot/Rebuild
+    t0 = time.time()
+    rc, _ = run(
+        ["pytest",
+         "tests/integration/test_package_snapshot.py",
          "tests/integration/test_package_snapshot_integrity.py",
          "tests/integration/test_rebuild_complete_state.py",
          "tests/regression/test_rebuild_identity.py", "-q"],
         out_dir / "snapshot_rebuild.txt",
     )
-    add_check("snapshot_rebuild", rc == 0, f"exit={rc}")
+    add("snapshot_rebuild", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 14. Review workflow
-    rc = run(
-        ["pytest", "tests/integration/test_review_batches.py",
+    # Review workflow
+    t0 = time.time()
+    rc, _ = run(
+        ["pytest",
+         "tests/integration/test_review_batches.py",
          "tests/regression/test_review_edit_revalidation.py", "-q"],
         out_dir / "review_workflow.txt",
     )
-    add_check("review_workflow", rc == 0, f"exit={rc}")
+    add("review_workflow", rc == 0, f"exit={rc}", rc, time.time() - t0)
 
-    # 15. Live DeepSeek (if key exists)
+    # Live DeepSeek
     api_key = os.getenv("EVIDENCE_AGENT_LLM_API_KEY")
     if api_key:
-        rc = run(
+        t0 = time.time()
+        rc, _ = run(
             ["pytest", "-m", "live_deepseek", "-q"],
             out_dir / "live_deepseek.txt",
         )
-        add_check("live_deepseek", rc == 0, f"exit={rc}")
+        add("live_deepseek", rc == 0, f"exit={rc}", rc, time.time() - t0)
     else:
-        add_check("live_deepseek", True, "BLOCKED_EXTERNAL")
+        add("live_deepseek", True, "BLOCKED_EXTERNAL")
         if mode == "release":
             report["result"] = "PASS_OFFLINE_LIVE_BLOCKED"
 
-    # 16. Repo hygiene
-    secrets_check = subprocess.run(
-        ["git", "ls-files", "-z"],
-        capture_output=True, text=True,
+    # Repo hygiene
+    secrets = subprocess.run(
+        ["git", "ls-files", "-z"], capture_output=True, text=True,
     )
-    paths = secrets_check.stdout.split("\0")
+    paths = secrets.stdout.split("\0")
     violations = []
     for p in paths:
-        if not p:
-            continue
+        if not p: continue
         if any(x in p for x in [".venv", "__pycache__", ".pyc"]):
             violations.append(p)
         if p.endswith((".sqlite", ".sqlite3", ".db", ".sqlite-wal", ".sqlite-shm")):
             violations.append(p)
         if p.endswith(".env") and p != ".env.example":
             violations.append(p)
-    repo_ok = len(violations) == 0
-    add_check("repo_hygiene", repo_ok,
-              f"violations={violations[:5]}" if violations else "clean")
+    add("repo_hygiene", len(violations) == 0,
+        f"violations={len(violations)}", 0 if not violations else 1)
 
-    # Final result
     all_pass = all(c["status"] == "PASS" for c in report["checks"])
     if not all_pass:
         report["result"] = "FAIL"
     elif report["result"] != "PASS_OFFLINE_LIVE_BLOCKED":
         report["result"] = "PASS"
 
-    # Write reports
-    (out_dir / "release_gate.json").write_text(
-        json.dumps(report, indent=2, ensure_ascii=False),
-    )
-    (out_dir / "release_gate.md").write_text(_md_report(report))
-
+    _write_reports(out_dir, report)
     return report
 
 
-def _md_report(report: dict[str, Any]) -> str:
-    lines = [
+def _write_reports(out_dir: Path, report: dict) -> None:
+    (out_dir / "release_gate.json").write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+    )
+    md_lines = [
         f"# Release Gate — v{report['version']}",
         f"**Mode**: {report['mode']}",
         f"**Timestamp**: {report['timestamp']}",
@@ -187,25 +238,23 @@ def _md_report(report: dict[str, Any]) -> str:
         "|-------|--------|----------|",
     ]
     for c in report["checks"]:
-        lines.append(f"| {c['name']} | {c['status']} | {c['evidence']} |")
-    return "\n".join(lines) + "\n"
+        md_lines.append(
+            f"| {c['name']} | {c['status']} | {c['evidence']} |"
+        )
+    (out_dir / "release_gate.md").write_text("\n".join(md_lines) + "\n")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Release Gate")
-    parser.add_argument("--version", required=True, help="Version (e.g. 0.1.1)")
-    parser.add_argument("--mode", default="local",
-                        choices=["local", "ci", "release"],
-                        help="Gate mode")
-    args = parser.parse_args()
-
+    p = argparse.ArgumentParser()
+    p.add_argument("--version", required=True)
+    p.add_argument("--mode", default="local",
+                   choices=["local", "ci", "release"])
+    args = p.parse_args()
     print(f"Release Gate v{args.version} ({args.mode})")
     report = run_gate(args.version, args.mode)
-    print(f"\nResult: {report['result']}")
-
+    print(f"Result: {report['result']}")
     if report["result"] == "FAIL":
         sys.exit(1)
-    sys.exit(0)
 
 
 if __name__ == "__main__":

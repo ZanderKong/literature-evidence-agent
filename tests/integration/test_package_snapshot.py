@@ -89,7 +89,7 @@ class TestPackageSnapshot:
 
     def test_check_valid_snapshot(self, setup):
         """check should pass on a valid snapshot."""
-        from evidence_agent.source_package.snapshot import sync_source, check_source
+        from evidence_agent.source_package.snapshot import check_source, sync_source
 
         sync_source("SRC-ps1")
         result = check_source("SRC-ps1")
@@ -100,7 +100,7 @@ class TestPackageSnapshot:
 
     def test_list_shows_snapshots(self, setup):
         """list should show all snapshots for a source."""
-        from evidence_agent.source_package.snapshot import sync_source, list_snapshots
+        from evidence_agent.source_package.snapshot import list_snapshots, sync_source
 
         sync_source("SRC-ps1")
         snapshots = list_snapshots("SRC-ps1")
@@ -119,8 +119,8 @@ class TestPackageSnapshot:
 
     def test_current_json_points_to_latest(self, setup):
         """current.json should point to the latest snapshot."""
+
         from evidence_agent.source_package.snapshot import sync_source
-        from pathlib import Path
 
         r1 = sync_source("SRC-ps1")
         r2 = sync_source("SRC-ps1")

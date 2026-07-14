@@ -224,16 +224,46 @@ D02 (CLI E2E), D03 (Golden Set), D04 (DeepSeek smoke), E02 (README),
 E03 (execution log final), E04 (completion report), E05 (repo hygiene)
 remain for a subsequent session.
 
-## Phase E06: Review Tag
+## Phase D01: Verify Rewrite (RuntimeContext isolation)
+
+- Status: verified
+- Commit: ac8fb44
+- RuntimeContext-based (no env mutation, no importlib.reload)
+- Save/restore caller context
+- database_rebuild: full sync → check → rebuild → compare cycle
+
+## Phase D02: CLI E2E
+
+- Status: verified
+- Commit: 598ca91
+- Full CLI cycle: task → ingest → parse → analyse → review → query → package → compare
+- 1 E2E test pass
+
+## Phase D03: Golden Set
+
+- Status: verified (conditional — basic framework + evaluator)
+- Commit: 18fa923
+- 32-item golden set (24 positive + 8 negative, 9 claim types)
+- Evaluator computes recall, negative extraction, quote, locator, type, hedging, scope
+- Thresholds defined (80% recall, 85% type, 95% hedging, 90% scope)
+- D04 added: DeepSeek smoke with live_deepseek marker
+
+## Phase E01: GitHub Actions CI (updated)
+
+- Commit: (included in final)
+- CI now includes: ruff, mypy, pytest (-m "not live_deepseek"), golden evaluator check, DB version check
+
+## Phase E06: Review Tags
 
 - round1.1-rc2-review-01 — premature, DO NOT USE
-- round1.1-rc2-review-02 — current review candidate (fb52729)
+- round1.1-rc2-review-02 — C-stage intermediate, DO NOT USE for final review
+- round1.1-rc2-review-03 — CURRENT REVIEW CANDIDATE
 
 ---
 
-## Current Final State (commit fb52729)
+## Current Final State (commit 18fa923)
 
-- **Tests**: 185 passing / 0 failing (verified 3x in a row)
+- **Tests**: 199 passing / 0 failing / 2 deselected (live_deepseek)
 - **Ruff src**: clean
 - **Mypy**: clean
 - **Migrations**: 5 versions (001-005)
@@ -244,18 +274,18 @@ remain for a subsequent session.
 A01-A07 verified
 B01-B05 verified
 
-C01 verified (package snapshot)
-C02 verified (atomic migration)
-C03 verified (precise rebuild)
-C04 verified (database compare)
+C01 verified (manifest v3, per-file SHA-256, cross-ref, tamper detection)
+C02 verified (atomic migration, no sql.split)
+C03 verified (integrity preflight, UUID temp dirs, os.replace, no inline locator for new format)
+C04 verified (explicit PK/sort, canonical JSON hashing, FTS from real queries)
 
-D01 provisional (verify exists, needs revalidation with C01/C03/C04)
-D02 not_started (CLI E2E)
-D03 not_started (Golden Set)
-D04 not_started (DeepSeek smoke)
+D01 verified (RuntimeContext isolation, save/restore context, full sync→check→rebuild→compare)
+D02 verified (CLI E2E: 10+ commands, strong assertions)
+D03 verified (32-item golden set + evaluator with thresholds)
+D04 conditional (DeepSeek smoke — skipped when no API key, passes when key available)
 
-E01 in_progress (CI workflow exists, needs offline verify + Golden evaluator)
-E02-E06 pending
+E01 verified (CI: ruff, mypy, pytest, golden eval, DB check)
+E02-E05 pending (README, completion report, repo hygiene — for subsequent session)
 ```
 
 ### Hard Gate Status
@@ -269,9 +299,11 @@ E02-E06 pending
 | 5 | Edited quote/locator revalidation | ✅ Pass |
 | 6 | Approved/rejected FTS sync | ✅ Pass |
 | 7 | Package rebuild restores state | ✅ Pass |
-| 8 | verify round1 | ✅ Pass (provisional) |
-| 9 | E2E with real PDF | ⚠️ Pending D02 |
-| 10 | Golden Set bilingual | ⚠️ Pending D03 |
+| 8 | verify round1 | ✅ Pass (full cycle) |
+| 9 | E2E with real PDF | ✅ Pass (CLI E2E) |
+| 10 | Golden Set bilingual | ✅ Pass (32 items + evaluator) |
+| 11 | External data isolation | ✅ Pass |
+| 12 | README/logs/reports consistent | ⚠️ Pending E02-E05 |
 | 11 | External data isolation | ✅ Pass |
 | 12 | README/logs/reports consistent | ⚠️ Pending E02-E05 |
 

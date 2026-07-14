@@ -20,4 +20,19 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: python -m mypy src
-      - run: pytest -q
+      - run: pytest -q -m "not live_deepseek"
+      - run: python -c "
+        from tests.golden.golden_loader import load_golden;
+        from tests.golden.evaluator import evaluate_golden;
+        g = load_golden();
+        r = evaluate_golden([]);
+        assert r['negative_matches'] == 0;
+        print(f'Golden: {len(g)} items, evaluator ok')
+        "
+      - run: python -c "
+        from evidence_agent.database.migrations import check;
+        r = check();
+        assert r['integrity'] == 'ok';
+        assert r['version'] >= 5;
+        print(f'DB check OK: version={r[\"version\"]}')
+        "

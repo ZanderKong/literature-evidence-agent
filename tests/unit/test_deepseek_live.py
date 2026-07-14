@@ -18,7 +18,8 @@ def test_deepseek_api_smoke():
         pytest.skip("EVIDENCE_AGENT_LLM_API_KEY not set")
 
     from evidence_agent.extraction.provider import (
-        DeepSeekProvider, ExtractionRequest,
+        DeepSeekProvider,
+        ExtractionRequest,
     )
 
     provider = DeepSeekProvider(api_key=api_key)
@@ -55,7 +56,8 @@ def test_deepseek_no_key_leaks_in_output():
         pytest.skip("EVIDENCE_AGENT_LLM_API_KEY not set")
 
     from evidence_agent.extraction.provider import (
-        DeepSeekProvider, ExtractionRequest,
+        DeepSeekProvider,
+        ExtractionRequest,
     )
 
     provider = DeepSeekProvider(api_key=api_key)

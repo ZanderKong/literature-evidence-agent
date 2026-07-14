@@ -6,7 +6,6 @@ rebuild → compare → verify.
 """
 
 import csv
-import json
 import tempfile
 from pathlib import Path
 
@@ -151,6 +150,7 @@ def test_cli_e2e_full_pipeline(runtime_context):
     from evidence_agent.runtime import get_current_context as gcc
     ctx = gcc()
     import tempfile as tmpf
+
     from evidence_agent.database.rebuild import rebuild_from_packages
     rebuilt = Path(tmpf.mktemp(suffix=".sqlite", dir=str(ctx.workspace_path)))
     rebuild_from_packages(target_db=rebuilt, replace=False)

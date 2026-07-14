@@ -1,9 +1,8 @@
 """Golden set evaluation tests."""
 
-import pytest
 
-from tests.golden.golden_loader import load_golden
 from tests.golden.evaluator import evaluate_golden
+from tests.golden.golden_loader import load_golden
 
 
 class TestGoldenSet:

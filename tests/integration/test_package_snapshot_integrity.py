@@ -5,7 +5,6 @@ concurrent sync, staging cleanup.
 """
 
 import json
-import os
 
 import pytest
 
@@ -60,7 +59,7 @@ class TestPackageSnapshotIntegrity:
 
     def test_check_verifies_file_sha256(self, setup):
         """check must compute and verify each JSONL file SHA-256 against manifest."""
-        from evidence_agent.source_package.snapshot import sync_source, check_source
+        from evidence_agent.source_package.snapshot import check_source, sync_source
 
         sync_source("SRC-int1")
         result = check_source("SRC-int1")
@@ -68,7 +67,7 @@ class TestPackageSnapshotIntegrity:
 
     def test_tamper_detection_same_row_count(self, setup):
         """Tampering content while keeping same row count must fail check."""
-        from evidence_agent.source_package.snapshot import sync_source, check_source
+        from evidence_agent.source_package.snapshot import check_source, sync_source
 
         sync_source("SRC-int1")
 
@@ -90,8 +89,10 @@ class TestPackageSnapshotIntegrity:
     def test_cross_reference_locator_to_claim(self, setup):
         """locator must reference existing claim."""
         import hashlib
+
         from evidence_agent.source_package.snapshot import (
-            sync_source, check_source,
+            check_source,
+            sync_source,
         )
 
         sync_source("SRC-int1")
@@ -132,7 +133,6 @@ class TestPackageSnapshotIntegrity:
 
     def test_staging_cleanup_on_failure(self, setup):
         """Failed sync must not leave staging directory."""
-        from pathlib import Path
         from evidence_agent.runtime import get_current_context
 
         ctx = get_current_context()
@@ -167,7 +167,7 @@ class TestPackageSnapshotIntegrity:
 
     def test_concurrent_sync_distinct_snapshots(self, setup):
         """Two syncs in sequence must create distinct, valid snapshots."""
-        from evidence_agent.source_package.snapshot import sync_source, check_source
+        from evidence_agent.source_package.snapshot import check_source, sync_source
 
         r1 = sync_source("SRC-int1")
         r2 = sync_source("SRC-int1")
@@ -179,10 +179,9 @@ class TestPackageSnapshotIntegrity:
 
     def test_residual_staging_invalidates_check(self, setup):
         """A leftover staging dir must not affect check_source."""
-        from pathlib import Path
 
-        from evidence_agent.source_package.snapshot import sync_source, check_source
         from evidence_agent.runtime import get_current_context
+        from evidence_agent.source_package.snapshot import check_source, sync_source
 
         ctx = get_current_context()
         sync_source("SRC-int1")

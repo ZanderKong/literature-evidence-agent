@@ -29,7 +29,8 @@ def load_annotations(path: Path) -> list[dict[str, Any]]:
             if line.strip():
                 rows.append(json.loads(line))
         return rows
-    return json.loads(path.read_text(encoding="utf-8"))
+    result = json.loads(path.read_text(encoding="utf-8"))
+    return list(result)
 
 
 def load_extracted_claims(path: Path) -> list[dict[str, Any]]:
@@ -126,7 +127,7 @@ def evaluate_annotations(
     hedging_exp = sum(1 for p in positives if p.get("author_hedging"))
     scope_exp = sum(1 for p in positives if p.get("scope_description"))
 
-    metrics = {
+    metrics: dict[str, Any] = {
         "total_annotations": len(annotations),
         "positive_count": tp, "negative_count": tn,
         "claim_count": len(claims),
@@ -142,15 +143,13 @@ def evaluate_annotations(
         "scope_preservation": _pct(scope_matched, scope_exp),
     }
 
-    thresholds = dict(GOLDEN_THRESHOLDS)
-    thresholds.update({
-        "negative_extraction": 0,
-        "unsupported_accepted": 0,
-    })
+    thresholds: dict[str, float] = dict(GOLDEN_THRESHOLDS)
+    thresholds["negative_extraction"] = 0.0
+    thresholds["unsupported_accepted"] = 0.0
 
     all_pass = True
     for key, threshold in thresholds.items():
-        actual = metrics.get(key, 0)
+        actual: float = metrics.get(key, 0.0)
         if key in ("negative_extraction", "unsupported_accepted"):
             if actual > threshold:
                 metrics[f"{key}_status"] = "FAIL"
@@ -178,7 +177,7 @@ def evaluate_annotations(
 
 
 def validate_thresholds(metrics: dict[str, Any]) -> bool:
-    return metrics.get("all_thresholds_pass", False)
+    return bool(metrics.get("all_thresholds_pass", False))
 
 
 def write_report(result: dict[str, Any], output_path: Path) -> None:

@@ -1,8 +1,23 @@
 # AGENTS.md — Literature Evidence Agent
 
-## 当前唯一执行计划
+## Current Version: v0.1.1
 
-plan/ROUND1_1_RC2_NEXT_STAGE_PLAN_FROM_EF2926E.md
+See `docs/releases/0.1.1/` for release documentation.
+See `docs/VERSIONING_AND_BRANCHING.md` for version and branch policy.
+
+## Branching Rules
+
+1. 长期分支只允许 `main` 和 `dev`。
+2. `main` 只保存 Review 通过的可发布状态。
+3. 所有开发直接进入 `dev`。
+4. 每个独立 prompt 或任务单独 commit。
+5. 每个 commit 完成后 push `dev`。
+6. 项目版本只在 RC 或正式发布时修改。
+7. RC 使用 `vX.Y.Z-rc.N`，正式发布使用 `vX.Y.Z`。
+8. 禁止 `Round`、`RC2`、`review-04` 等组合命名。
+9. 禁止 force-push `main`。
+10. Release Gate 非 PASS 时禁止 tag。
+11. 历史 tag 不得移动或覆盖。
 
 ## 当前唯一工作分支
 

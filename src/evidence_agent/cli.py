@@ -4,11 +4,31 @@ import json
 
 import typer
 
+from evidence_agent.version import get_version
+
 app = typer.Typer(
     name="evidence-agent",
     help="文献证据 Agent — 文献主张提取与人工复核系统",
     no_args_is_help=True,
 )
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        print(f"literature-evidence-agent {get_version()}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main_callback(
+    version: bool = typer.Option(
+        False, "--version", "-V",
+        help="Show version and exit",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    pass
 
 
 @app.command()

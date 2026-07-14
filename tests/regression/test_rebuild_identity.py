@@ -51,11 +51,14 @@ class TestRebuildIdentity:
         claims = [
             {
                 "_claim_id": known_claim_id,
+                "claim_id": known_claim_id,
+                "locator_id": known_locator_id,
                 "claim_type": "reported_result",
                 "source_quote": "Test quote",
                 "faithful_paraphrase": "Test paraphrase",
                 "evidence_basis_description": "Test evidence",
                 "locator_hint": {"page": 1},
+                "page": 1,
                 "_quote_match_status": "exact",
                 "_block_page_start": 1,
                 "created_at": "2025-01-01T00:00:00",
@@ -180,11 +183,14 @@ class TestRebuildIdentity:
             [
                 {
                     "_claim_id": "CLM-test003",
+                    "claim_id": "CLM-test003",
+                    "locator_id": "LOC-test003",
                     "claim_type": "reported_result",
                     "source_quote": "Quote",
                     "faithful_paraphrase": "Para",
                     "evidence_basis_description": "Evid",
                     "locator_hint": {"page": 1},
+                    "page": 1,
                     "_quote_match_status": "exact",
                     "_block_page_start": 1,
                     "created_at": "2025-01-01T00:00:00",
@@ -192,6 +198,40 @@ class TestRebuildIdentity:
                 }
             ],
             analysis_dir / "claims.persisted.jsonl",
+        )
+
+        review_dir = src_dir / "review"
+        review_dir.mkdir(exist_ok=True)
+        _save_jsonl(
+            [
+                {
+                    "review_id": "REV-test003",
+                    "object_type": "claim",
+                    "object_id": "CLM-test003",
+                    "decision": "approve",
+                    "original_content_json": "{}",
+                    "reviewer": "tester",
+                    "review_reason": None,
+                    "reviewed_at": "2025-01-01T00:00:00",
+                    "review_batch_id": None,
+                    "review_row_id": None,
+                }
+            ],
+            review_dir / "decisions.jsonl",
+        )
+        _save_jsonl(
+            [
+                {
+                    "revision_id": "RVR-test003",
+                    "claim_id": "CLM-test003",
+                    "previous_content_json": "{}",
+                    "new_content_json": '{"source_quote":"Edited"}',
+                    "changed_by": "tester",
+                    "change_reason": "correction",
+                    "created_at": "2025-01-01T00:00:00",
+                }
+            ],
+            review_dir / "revisions.jsonl",
         )
 
         from evidence_agent.database.rebuild import rebuild_from_packages

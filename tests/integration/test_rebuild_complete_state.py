@@ -78,11 +78,13 @@ class TestRebuildCompleteState:
                 {
                     "_claim_id": "CLM-rcs1",
                     "claim_id": "CLM-rcs1",
+                    "locator_id": "LOC-rcs1",
                     "claim_type": "reported_result",
                     "source_quote": "Quote rebuild test",
                     "faithful_paraphrase": "Paraphrase rebuild",
                     "evidence_basis_description": "Evidence rebuild",
                     "locator_hint": {"page": 1},
+                    "page": 1,
                     "_quote_match_status": "exact",
                     "_block_page_start": 1,
                     "_record_review_status": "approved",
@@ -112,6 +114,27 @@ class TestRebuildCompleteState:
             ],
             provenance_dir / "processing_runs.jsonl",
         )
+
+        review_dir = src_dir / "review"
+        review_dir.mkdir(exist_ok=True)
+        _save_jsonl(
+            [
+                {
+                    "review_id": "REV-rcs1",
+                    "object_type": "claim",
+                    "object_id": "CLM-rcs1",
+                    "decision": "approve",
+                    "original_content_json": "{}",
+                    "reviewer": "tester",
+                    "review_reason": None,
+                    "reviewed_at": "2025-01-01T00:00:00",
+                    "review_batch_id": None,
+                    "review_row_id": None,
+                }
+            ],
+            review_dir / "decisions.jsonl",
+        )
+        _save_jsonl([], review_dir / "revisions.jsonl")
 
         return runtime_context
 

@@ -19,7 +19,6 @@ def test_short_version_flag():
     assert "literature-evidence-agent" in result.output
 
 
-def test_version_module():
+def test_version_string():
     v = get_version()
-    assert v is not None
-    assert len(v) > 0
+    assert "0.1" in v, f"Expected 0.1.x, got {v}"

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "literature-evidence-agent"
-version = "0.1.1rc1"
+version = "0.1.1"
 description = "Literature Evidence Agent — 文献证据提取与人工复核系统"
 requires-python = ">=3.11"
 readme = "README.md"

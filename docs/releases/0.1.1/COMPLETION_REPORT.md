@@ -1,7 +1,7 @@
 # Completion Report — v0.1.1
 
 - **Version**: v0.1.1
-- **Candidate SHA**: `b832a48` (latest)
+- **Release SHA**: `7a9307f84f829b817de44f9d6606a2aadbb2c4e9` (RC), final tag pending
 - **Release Branch**: `fix/round1.1-rc2-hardening`
 - **Python**: 3.11, 3.12
 - **Migrations**: 5 versions (001-005)

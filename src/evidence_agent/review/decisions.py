@@ -209,6 +209,18 @@ def apply_review_csv(csv_path: Path) -> dict[str, Any]:
                 for row in rows:
                     refresh_task_status(row["task_id"])
 
+                source_rows = conn.execute(
+                    f"SELECT DISTINCT b.source_id FROM review_batches b "
+                    f"WHERE b.review_batch_id IN ({placeholders})",
+                    tuple(batch_ids),
+                ).fetchall()
+                for row in source_rows:
+                    try:
+                        from evidence_agent.source_package.snapshot import sync_source
+                        sync_source(row["source_id"])
+                    except Exception:
+                        pass
+
     return report
 
 

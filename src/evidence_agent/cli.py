@@ -213,6 +213,69 @@ def compare(
         raise typer.Exit(code=7)
 
 
+package_app = typer.Typer(help="Package snapshot management commands")
+app.add_typer(package_app, name="package")
+
+
+@package_app.command()
+def sync(source_id: str) -> None:
+    """Sync all DB state for a source into its package snapshot."""
+    from evidence_agent.source_package.snapshot import sync_source
+
+    try:
+        result = sync_source(source_id)
+        typer.echo(f"Snapshot synced: {result['snapshot_id']}")
+        for table, count in sorted(result["record_counts"].items()):
+            typer.echo(f"  {table}: {count}")
+    except Exception as e:
+        typer.echo(f"Sync failed: {e}", err=True)
+        raise typer.Exit(code=5) from e
+
+
+@package_app.command()
+def validate(source_id: str) -> None:
+    """Validate a source package snapshot integrity."""
+    from evidence_agent.source_package.snapshot import check_source
+
+    try:
+        result = check_source(source_id)
+        if result["valid"]:
+            typer.echo(f"Snapshot valid: {result['snapshot_id']}")
+            for table, count in sorted(result["record_counts"].items()):
+                typer.echo(f"  {table}: {count}")
+            typer.echo(f"  Total: {result['expected_total']}")
+        else:
+            typer.echo("Snapshot INVALID:", err=True)
+            for e in result["errors"]:
+                typer.echo(f"  - {e}", err=True)
+            raise typer.Exit(code=5)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        typer.echo(f"Check failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
+
+
+@package_app.command()
+def list_snapshots(source_id: str) -> None:
+    """List all snapshots for a source."""
+    from evidence_agent.source_package.snapshot import list_snapshots as ls
+
+    try:
+        snapshots = ls(source_id)
+        if not snapshots:
+            typer.echo("No snapshots found.")
+            return
+        for s in snapshots:
+            typer.echo(f"  {s['snapshot_id']}")
+            typer.echo(f"    created: {s.get('created_at', 'unknown')}")
+            for table, count in sorted(s["record_counts"].items()):
+                typer.echo(f"    {table}: {count}")
+    except Exception as e:
+        typer.echo(f"List failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
+
+
 @app.command()
 def ingest(file: str) -> None:
     """Import a local PDF as an external source."""

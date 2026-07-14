@@ -103,6 +103,11 @@ def generate_entity_id() -> str:
     return f"ENT-{get_id_factory()()}"
 
 
+def generate_snapshot_id() -> str:
+    """Generate a snapshot ID like SNP-<32 hex>."""
+    return f"SNP-{get_id_factory()()}"
+
+
 def now_iso() -> str:
     """Current UTC time as ISO 8601 string."""
     return datetime.now(UTC).isoformat()

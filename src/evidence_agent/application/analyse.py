@@ -311,6 +311,13 @@ def analyse_source(
             from evidence_agent.database.repositories import refresh_task_status
             refresh_task_status(task_id)
 
+        # 17. Sync package snapshot
+        try:
+            from evidence_agent.source_package.snapshot import sync_source
+            sync_source(source_id)
+        except Exception:
+            warnings.append("Package snapshot sync failed")
+
         return {
             "run_id": run_id,
             "status": "completed",

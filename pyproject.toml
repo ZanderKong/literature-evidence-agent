@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "literature-evidence-agent"
-version = "0.1.0"
+version = "0.1.1"
 description = "Literature Evidence Agent — 文献证据提取与人工复核系统"
 requires-python = ">=3.11"
 readme = "README.md"
@@ -38,6 +38,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "live_deepseek: tests requiring DeepSeek API (skipped in CI)",
+]
 
 [tool.ruff]
 target-version = "py311"

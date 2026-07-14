@@ -1,0 +1,10 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": [
+    "AGENTS.md",
+    "plan/ROUND1_1_RC2_NEXT_STAGE_PLAN_FROM_EF2926E.md",
+    "docs/plans/ROUND1_1_RC2_EXECUTION_LOG.md"
+  ],
+  "snapshot": true,
+  "autoupdate": "notify"
+}

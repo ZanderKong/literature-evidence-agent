@@ -1,28 +1,31 @@
-"""Database connection management."""
+"""Database connection management.
+
+Supports explicit db_path or falls back to the current RuntimeContext.
+"""
 
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from evidence_agent.config import config
 
-
-def get_db_path() -> Path:
-    """Get the database file path from config."""
-    return config.db_path
+def _get_db_path(db_path: Path | None = None) -> Path:
+    """Resolve the database path."""
+    if db_path is not None:
+        return db_path.resolve()
+    from evidence_agent.runtime import get_current_context
+    return get_current_context().db_path
 
 
 def connect(db_path: Path | None = None, *, read_only: bool = False) -> sqlite3.Connection:
     """Create a database connection with required pragmas."""
-    path = db_path or get_db_path()
+    path = _get_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if read_only:
         uri = f"file:{path}?mode=ro"
         conn = sqlite3.connect(uri, uri=True)
         conn.row_factory = sqlite3.Row
-        # Read-only: skip write pragmas
         try:
             conn.execute("PRAGMA foreign_keys = ON")
         except sqlite3.OperationalError:

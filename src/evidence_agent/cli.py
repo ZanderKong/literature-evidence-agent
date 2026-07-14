@@ -4,6 +4,8 @@ import json
 
 import typer
 
+from evidence_agent.version import get_version
+
 app = typer.Typer(
     name="evidence-agent",
     help="文献证据 Agent — 文献主张提取与人工复核系统",
@@ -11,20 +13,96 @@ app = typer.Typer(
 )
 
 
+def _version_callback(value: bool) -> None:
+    if value:
+        print(f"literature-evidence-agent {get_version()}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main_callback(
+    version: bool = typer.Option(
+        False, "--version", "-V",
+        help="Show version and exit",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    pass
+
+
 @app.command()
 def init() -> None:
     """Initialize the workspace directory structure."""
-    from evidence_agent.config import config
+    from evidence_agent.runtime import get_current_context
 
-    config.ensure_directories()
-    typer.echo(f"Workspace initialized at: {config.workspace_path}")
-    typer.echo(f"Database path: {config.db_path}")
+    ctx = get_current_context()
+    ctx.ensure_directories()
+    typer.echo(f"Workspace initialized at: {ctx.workspace_path}")
+    typer.echo(f"Database path: {ctx.db_path}")
 
 
 @app.command()
 def version() -> None:
     """Show version information."""
     typer.echo("literature-evidence-agent v0.1.0")
+
+
+# ── Task sub-commands ──────────────────────────────────
+
+task_app = typer.Typer(help="Research task management commands")
+app.add_typer(task_app, name="task")
+
+
+@task_app.command()
+def create(
+    title: str = typer.Option(..., "--title", "-t", help="Task title"),
+    request: str = typer.Option(..., "--request", "-r", help="User request"),
+    background: str = typer.Option(None, "--background", "-b", help="Research background"),
+    mode: str = typer.Option("analyse_uploaded", "--mode", "-m", help="Task mode"),
+    depth: str = typer.Option("task_focused", "--depth", "-d", help="Analysis depth"),
+) -> None:
+    """Create a new research task."""
+    from evidence_agent.database.repositories import create_task
+
+    try:
+        result = create_task(title, request, background, mode, depth)
+        typer.echo(f"Created task: {result['task_id']}")
+        typer.echo(f"  Title: {result['title']}")
+        typer.echo(f"  Mode: {result['task_mode']}")
+        typer.echo(f"  Depth: {result['analysis_depth']}")
+        typer.echo(f"  Status: {result['status']}")
+    except ValueError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=2) from e
+
+
+@task_app.command()
+def show(task_id: str) -> None:
+    """Show details of a research task."""
+    from evidence_agent.database.repositories import get_task
+
+    task = get_task(task_id)
+    if task is None:
+        typer.echo(f"Task not found: {task_id}", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(json.dumps(task, indent=2, default=str))
+
+
+@task_app.command()
+def list(
+    status: str = typer.Option(None, "--status", "-s", help="Filter by status"),
+) -> None:
+    """List research tasks."""
+    from evidence_agent.database.repositories import list_tasks
+
+    tasks = list_tasks(status=status)
+    if not tasks:
+        typer.echo("No tasks found.")
+    for t in tasks:
+        typer.echo(
+            f"[{t['task_id']}] {t['status']:10s} {t['title'][:50]}"
+        )
 
 
 # ── Database sub-commands ──────────────────────────────
@@ -36,10 +114,11 @@ app.add_typer(db_app, name="db")
 @db_app.command()
 def migrate() -> None:
     """Run database migrations."""
-    from evidence_agent.config import config
     from evidence_agent.database.migrations import migrate as run_migrate
+    from evidence_agent.runtime import get_current_context
 
-    config.ensure_directories()
+    ctx = get_current_context()
+    ctx.ensure_directories()
 
     try:
         applied = run_migrate()
@@ -70,22 +149,150 @@ def check() -> None:
 
 
 @db_app.command()
-def rebuild() -> None:
-    """Rebuild database from source packages (destructive, re-runs all migrations)."""
-    from evidence_agent.database.migrations import rebuild as run_rebuild
+def rebuild_from_packages(
+    source: str = typer.Option(None, "--source", help="Sources directory"),
+    target: str = typer.Option(None, "--target", help="Target database path"),
+) -> None:
+    """Rebuild database from all source packages."""
+    from pathlib import Path as _Path
 
-    typer.echo("WARNING: This will drop all existing data!")
-    typer.echo("Continue? [y/N] ", nl=False)
-    answer = input().strip().lower()
-    if answer not in ("y", "yes"):
-        typer.echo("Aborted.")
-        raise typer.Exit(code=0)
+    from evidence_agent.database.rebuild import rebuild_from_packages
 
+    src_dir = _Path(source) if source else None
+    tgt = _Path(target) if target else None
     try:
-        applied = run_rebuild()
-        typer.echo(f"Rebuilt: {len(applied)} migration(s) applied")
+        report = rebuild_from_packages(source_dir=src_dir, target_db=tgt)
+        typer.echo(json.dumps(report, indent=2, default=str))
     except Exception as e:
         typer.echo(f"Rebuild failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
+
+
+@db_app.command()
+def reset() -> None:
+    """Drop all tables and re-run migrations (DESTRUCTIVE)."""
+    from evidence_agent.database.migrations import rebuild as run_rebuild
+    typer.echo("WARNING: Drops all data!")
+    ans = input("Continue? [y/N] ").strip().lower()
+    if ans not in ("y", "yes"):
+        typer.echo("Aborted.")
+        raise typer.Exit(code=0)
+    try:
+        applied = run_rebuild()
+        typer.echo(f"Reset: {len(applied)} migrations applied")
+    except Exception as e:
+        typer.echo(f"Reset failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
+
+
+@db_app.command()
+def snapshot_summary(
+    database: str = typer.Option(..., "--database", help="Path to SQLite database"),
+    output: str = typer.Option(None, "--output", help="Output path (stdout if omitted)"),
+) -> None:
+    """Compute structured summary of a database."""
+    from pathlib import Path
+
+    from evidence_agent.database.state_compare import snapshot_summary as run_summary
+
+    db_path = Path(database)
+    if not db_path.exists():
+        typer.echo(f"Database not found: {database}", err=True)
+        raise typer.Exit(code=3)
+
+    summary = run_summary(db_path)
+    text = json.dumps(summary, indent=2, default=str)
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+        typer.echo(f"Summary written to {output}")
+    else:
+        typer.echo(text)
+
+
+@db_app.command()
+def compare(
+    db_a: str = typer.Option(..., "--db-a", help="First database path"),
+    db_b: str = typer.Option(..., "--db-b", help="Second database path"),
+    output: str = typer.Option(None, "--output", help="Output path"),
+) -> None:
+    """Compare two databases and report differences. Exit 0 if identical, 7 if different."""
+    from pathlib import Path
+
+    from evidence_agent.database.state_compare import compare_databases
+
+    result = compare_databases(Path(db_a), Path(db_b))
+    text = json.dumps(result, indent=2, default=str)
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+    else:
+        typer.echo(text)
+
+    if result.get("error"):
+        raise typer.Exit(code=3)
+    if not result.get("identical", False):
+        raise typer.Exit(code=7)
+
+
+package_app = typer.Typer(help="Package snapshot management commands")
+app.add_typer(package_app, name="package")
+
+
+@package_app.command()
+def sync(source_id: str) -> None:
+    """Sync all DB state for a source into its package snapshot."""
+    from evidence_agent.source_package.snapshot import sync_source
+
+    try:
+        result = sync_source(source_id)
+        typer.echo(f"Snapshot synced: {result['snapshot_id']}")
+        for table, count in sorted(result["record_counts"].items()):
+            typer.echo(f"  {table}: {count}")
+    except Exception as e:
+        typer.echo(f"Sync failed: {e}", err=True)
+        raise typer.Exit(code=5) from e
+
+
+@package_app.command()
+def validate(source_id: str) -> None:
+    """Validate a source package snapshot integrity."""
+    from evidence_agent.source_package.snapshot import check_source
+
+    try:
+        result = check_source(source_id)
+        if result["valid"]:
+            typer.echo(f"Snapshot valid: {result['snapshot_id']}")
+            for table, count in sorted(result["record_counts"].items()):
+                typer.echo(f"  {table}: {count}")
+            typer.echo(f"  Total: {result['expected_total']}")
+        else:
+            typer.echo("Snapshot INVALID:", err=True)
+            for e in result["errors"]:
+                typer.echo(f"  - {e}", err=True)
+            raise typer.Exit(code=5)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        typer.echo(f"Check failed: {e}", err=True)
+        raise typer.Exit(code=3) from e
+
+
+@package_app.command()
+def list_snapshots(source_id: str) -> None:
+    """List all snapshots for a source."""
+    from evidence_agent.source_package.snapshot import list_snapshots as ls
+
+    try:
+        snapshots = ls(source_id)
+        if not snapshots:
+            typer.echo("No snapshots found.")
+            return
+        for s in snapshots:
+            typer.echo(f"  {s['snapshot_id']}")
+            typer.echo(f"    created: {s.get('created_at', 'unknown')}")
+            for table, count in sorted(s["record_counts"].items()):
+                typer.echo(f"    {table}: {count}")
+    except Exception as e:
+        typer.echo(f"List failed: {e}", err=True)
         raise typer.Exit(code=3) from e
 
 
@@ -115,26 +322,20 @@ def ingest(file: str) -> None:
 @app.command()
 def parse(source_id: str) -> None:
     """Parse an imported PDF source."""
-    from evidence_agent.config import config
-    from evidence_agent.parsers.pdf import parse_pdf
-
-    package_dir = config.sources_dir / source_id
-
-    if not package_dir.exists():
-        typer.echo(f"Source not found: {source_id}", err=True)
-        raise typer.Exit(code=2)
+    from evidence_agent.application.parse import parse_source
 
     try:
-        result = parse_pdf(source_id, package_dir)
+        result = parse_source(source_id)
+        if result.status == "failed":
+            typer.echo(f"Parse failed: {result.error}", err=True)
+            raise typer.Exit(code=4)
         typer.echo(f"Parsed {source_id}")
-        typer.echo(f"  Pages: {result['quality']['total_pages']}")
-        typer.echo(f"  Sections: {result['quality'].get('section_count', len(result['sections']))}")
-        typer.echo(f"  Low text density: {result['quality']['is_low_text_density']}")
-        for name, path in result["output_paths"].items():
+        typer.echo(f"  Pages: {result.total_pages}")
+        typer.echo(f"  Sections: {result.section_count}")
+        typer.echo(f"  Persisted: {result.sections_persisted}")
+        typer.echo(f"  Low text density: {result.low_text_density}")
+        for name, path in result.output_paths.items():
             typer.echo(f"  {name}: {path}")
-    except FileNotFoundError as e:
-        typer.echo(f"Parse failed: {e}", err=True)
-        raise typer.Exit(code=4) from e
     except Exception as e:
         typer.echo(f"Parse failed: {e}", err=True)
         raise typer.Exit(code=4) from e
@@ -152,12 +353,13 @@ def export(run_id: str) -> None:
     from evidence_agent.review.packet import generate_review_packet
 
     try:
-        paths = generate_review_packet(
-            validated_claims=[],
-            failed_locators=[],
-            run_id=run_id,
-        )
-        typer.echo(f"Review packet created at: {paths['csv']}")
+        paths = generate_review_packet(run_id)
+        typer.echo(f"Review packet: {paths['csv']}")
+        for k, v in paths.items():
+            typer.echo(f"  {k}: {v}")
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=6) from e
     except Exception as e:
         typer.echo(f"Review export failed: {e}", err=True)
         raise typer.Exit(code=6) from e
@@ -212,13 +414,14 @@ def export_source(
     include_pending: bool = False,
 ) -> None:
     """Export a source's approved claims."""
-    from evidence_agent.config import config
     from evidence_agent.exports.markdown import (
         export_source_jsonl,
         export_source_markdown,
     )
+    from evidence_agent.runtime import get_current_context
 
-    exports_dir = config.exports_dir
+    ctx = get_current_context()
+    exports_dir = ctx.exports_dir
     exports_dir.mkdir(parents=True, exist_ok=True)
 
     try:
@@ -241,6 +444,78 @@ def export_source(
 # ── Verify command ─────────────────────────────────────
 
 @app.command()
+def analyse(
+    source_id: str,
+    task: str = typer.Option(None, "--task", help="Task ID to associate"),
+    provider: str = typer.Option(None, "--provider", help="Provider: mock|deepseek"),
+) -> None:
+    """Run full analysis pipeline on a source."""
+    from evidence_agent.application.analyse import analyse_source
+
+    try:
+        result = analyse_source(source_id, task, provider)
+        typer.echo(json.dumps(result, indent=2, default=str))
+        if result["status"] == "failed":
+            raise typer.Exit(code=5)
+    except ValueError as e:
+        typer.echo(f"Analysis failed: {e}", err=True)
+        raise typer.Exit(code=2) from e
+    except Exception as e:
+        typer.echo(f"Analysis failed: {e}", err=True)
+        raise typer.Exit(code=5) from e
+
+
+@app.command()
+def source_show(source_id: str) -> None:
+    """Show source details."""
+    import json as _json
+
+    from evidence_agent.database.connection import get_connection
+    with get_connection(read_only=True) as conn:
+        cursor = conn.execute("SELECT * FROM sources WHERE source_id=?", (source_id,))
+        row = cursor.fetchone()
+        if not row:
+            typer.echo(f"Source not found: {source_id}", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(_json.dumps(dict(row), indent=2, default=str))
+
+
+@app.command()
+def claim_show(claim_id: str) -> None:
+    """Show claim details."""
+    import json as _json
+
+    from evidence_agent.database.connection import get_connection
+    with get_connection(read_only=True) as conn:
+        cursor = conn.execute(
+            "SELECT c.*, l.page, l.figure_label, l.table_label "
+            "FROM source_claims c "
+            "LEFT JOIN claim_locators l ON c.claim_id = l.claim_id "
+            "WHERE c.claim_id=?", (claim_id,))
+        row = cursor.fetchone()
+        if not row:
+            typer.echo(f"Claim not found: {claim_id}", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(_json.dumps(dict(row), indent=2, default=str))
+
+
+@app.command()
+def run_show(run_id: str) -> None:
+    """Show processing run details."""
+    import json as _json
+
+    from evidence_agent.database.connection import get_connection
+    with get_connection(read_only=True) as conn:
+        cursor = conn.execute(
+            "SELECT * FROM processing_runs WHERE run_id=?", (run_id,))
+        row = cursor.fetchone()
+        if not row:
+            typer.echo(f"Run not found: {run_id}", err=True)
+            raise typer.Exit(code=2)
+        typer.echo(_json.dumps(dict(row), indent=2, default=str))
+
+
+@app.command()
 def verify(round_name: str = "round1") -> None:
     """Run verification checks."""
     if round_name == "round1":
@@ -251,40 +526,28 @@ def verify(round_name: str = "round1") -> None:
 
 
 def _verify_round1() -> None:
-    """Run Round 1 verification checks."""
-    from evidence_agent.database.migrations import check as db_check
+    """Run Round 1 verification with real behavioral checks."""
+    from evidence_agent.verification.round1 import run_round1_verification
 
-    all_pass = True
+    report = run_round1_verification()
 
-    # Database integrity
-    try:
-        results = db_check()
-        if results["integrity"] == "ok":
-            typer.echo("database_integrity=PASS")
+    for check in report.checks:
+        status = check["status"]
+        name = check["name"]
+        evidence = check.get("evidence", "")
+        reason = check.get("reason", "")
+        if status == "PASS":
+            typer.echo(
+                f"{name}=PASS duration_ms={check['duration_ms']} "
+                f"evidence={evidence}"
+            )
         else:
-            typer.echo(f"database_integrity=FAIL ({results['integrity']})")
-            all_pass = False
-    except Exception as e:
-        typer.echo(f"database_integrity=FAIL ({e})")
-        all_pass = False
+            typer.echo(
+                f"{name}=FAIL duration_ms={check['duration_ms']} "
+                f"reason={reason} evidence={evidence}"
+            )
 
-    try:
-        # Quick smoke test: can we connect and query?
-        from evidence_agent.database.connection import get_connection
-        with get_connection(read_only=True) as conn:
-            conn.execute("SELECT COUNT(*) FROM sources")
-        typer.echo("ingest_idempotency=PASS")
-    except Exception as e:
-        typer.echo(f"ingest_idempotency=FAIL ({e})")
-        all_pass = False
-
-    typer.echo("quote_traceability=PASS")
-    typer.echo("review_workflow=PASS")
-    typer.echo("fts_search=PASS")
-    typer.echo("database_rebuild=PASS")
-    typer.echo("external_data_isolation=PASS")
-
-    if all_pass:
+    if report.all_pass:
         typer.echo("ROUND1_VERIFICATION=PASS")
         raise typer.Exit(code=0)
     else:

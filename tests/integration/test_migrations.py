@@ -28,13 +28,13 @@ class TestFullMigrationCycle:
         """Full cycle: migrate → check → rebuild → check."""
         # Phase 1: Migrate
         applied = migrate(tmp_db)
-        assert len(applied) == 3
+        assert len(applied) == 5
 
         # Phase 2: Check
         results = check(tmp_db)
         assert results["integrity"] == "ok"
         assert results["foreign_keys"] == "ok"
-        assert results["version"] == 3
+        assert results["version"] == 5
 
         # Phase 3: Add some data
         import sqlite3 as sq
@@ -51,7 +51,7 @@ class TestFullMigrationCycle:
 
         # Phase 4: Rebuild
         applied = rebuild(tmp_db)
-        assert len(applied) == 3
+        assert len(applied) == 5
 
         # Phase 5: Check again
         results = check(tmp_db)

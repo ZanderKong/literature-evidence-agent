@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from evidence_agent.extraction.response_parser import parse_claim_response
+
 # ── Data types ─────────────────────────────────────────
 
 @dataclass
@@ -62,6 +64,19 @@ def _compute_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
+def _quote_appears_in(quote: str, text_lower: str) -> bool:
+    """Check if a quote appears in the text (case-insensitive)."""
+    if not quote or not quote.strip():
+        return False
+    words = [w for w in quote.lower().strip().split() if len(w) > 3]
+    if len(words) < 2:
+        return False
+    matched = sum(1 for w in words if w in text_lower)
+    if len(words) <= 5:
+        return matched >= len(words) * 0.5
+    return matched >= max(len(words) * 0.45, 3)
+
+
 # ── Mock Provider ──────────────────────────────────────
 
 class MockProvider:
@@ -70,8 +85,14 @@ class MockProvider:
     No API key required. Used by default in tests.
     """
 
-    def __init__(self, fixed_claims: list[dict[str, Any]] | None = None) -> None:
+    def __init__(
+        self,
+        fixed_claims: list[dict[str, Any]] | None = None,
+        *,
+        check_quotes: bool = True,
+    ) -> None:
         self._fixed_claims = fixed_claims or self._default_claims()
+        self._check_quotes = check_quotes
 
     @property
     def model_name(self) -> str:
@@ -92,7 +113,6 @@ class MockProvider:
         )
         input_hash = _compute_hash(input_content)
 
-        # If section is very short/empty, return no claims
         if len(request.section_text.strip()) < 20:
             return ExtractionResponse(
                 claims=[],
@@ -103,9 +123,17 @@ class MockProvider:
                 output_hash=_compute_hash("[]"),
             )
 
-        output = json.dumps(self._fixed_claims, ensure_ascii=False)
+        if self._check_quotes:
+            section_lower = request.section_text.lower()
+            matching = [
+                c for c in self._fixed_claims
+                if _quote_appears_in(c.get("source_quote", ""), section_lower)
+            ]
+        else:
+            matching = list(self._fixed_claims)
+        output = json.dumps(matching, ensure_ascii=False)
         return ExtractionResponse(
-            claims=self._fixed_claims,
+            claims=list(matching),
             raw_response=output,
             model_name=self.model_name,
             prompt_version=self.prompt_version,
@@ -115,52 +143,89 @@ class MockProvider:
 
     @staticmethod
     def _default_claims() -> list[dict[str, Any]]:
-        """Default mock claims for testing."""
+        """Default mock claims matching real scientific PDF content."""
         return [
             {
                 "claim_type": "reported_result",
-                "source_quote": "The solubility increased from 1.0 to 5.2 mg/mL.",
-                "faithful_paraphrase": "溶解度从 1.0 增加到 5.2 mg/mL。",
-                "evidence_basis_description": "基于 Figure 1 的相溶解度实验。",
-                "scope_description": "在水溶液中 25°C 条件。",
+                "source_quote": (
+                    "The solubility of curcumin increased from "
+                    "0.6 microgram per mL to 3.2 mg per mL upon "
+                    "complexation with HP-beta-CD at a 1:2 molar ratio"
+                ),
+                "faithful_paraphrase": (
+                    "姜黄素与HP-beta-CD以1:2摩尔比络合后，"
+                    "溶解度从0.6 microgram/mL增加至3.2 mg/mL。"
+                ),
+                "evidence_basis_description": "基于相溶解度实验数据。",
+                "scope_description": "适用于HP-beta-CD/姜黄素水溶液体系。",
                 "author_hedging": None,
                 "locator_hint": {
                     "page": 1,
-                    "section_heading": "Results",
-                    "figure_label": "Figure 1",
-                    "table_label": None,
+                    "section_heading": "Abstract",
                 },
-                "entities": [
-                    {
-                        "entity_type": "property",
-                        "display_name": "solubility",
-                        "role": "property",
-                    }
-                ],
+                "entities": [],
             },
             {
                 "claim_type": "author_interpretation",
                 "source_quote": (
-                    "This suggests that hydrogen bonding "
-                    "plays a key role in the stabilization."
+                    "This suggests that the aromatic ring of curcumin "
+                    "is deeply inserted into the hydrophobic cavity of "
+                    "HP-beta-CD, while the phenolic groups form hydrogen "
+                    "bonds with the rim hydroxyls"
                 ),
-                "faithful_paraphrase": "作者认为氢键在稳定化中起关键作用。",
-                "evidence_basis_description": "基于 FT-IR 和 NMR 数据推断。",
+                "faithful_paraphrase": (
+                    "作者提出姜黄素芳香环深入HP-beta-CD疏水空腔，"
+                    "酚羟基与边缘羟基形成氢键。"
+                ),
+                "evidence_basis_description": "基于FT-IR光谱数据（Figure 1）推断。",
                 "scope_description": None,
                 "author_hedging": "suggests",
                 "locator_hint": {
-                    "page": 2,
-                    "section_heading": "Discussion",
-                    "figure_label": "Figure 3",
-                    "table_label": None,
+                    "page": 1,
+                    "section_heading": "Results",
+                    "figure_label": "Figure 1",
+                    "table_label": "Table 1",
+                },
+                "entities": [],
+            },
+            {
+                "claim_type": "author_limitation",
+                "source_quote": (
+                    "However the in vitro dissolution results may not "
+                    "directly predict in vivo performance and further "
+                    "pharmacokinetic studies are warranted"
+                ),
+                "faithful_paraphrase": (
+                    "作者指出体外溶出结果可能无法直接预测体内表现，"
+                    "需要进一步的药代动力学研究。"
+                ),
+                "evidence_basis_description": "作者自述的研究局限性。",
+                "scope_description": None,
+                "author_hedging": "may not",
+                "locator_hint": {
+                    "page": 1,
+                    "section_heading": "Results",
+                },
+                "entities": [],
+            },
+            {
+                "claim_type": "future_work",
+                "source_quote": (
+                    "Future work should investigate the in vivo "
+                    "bioavailability of the curcumin-HP-beta-CD complex "
+                    "in animal models"
+                ),
+                "faithful_paraphrase": "未来应研究该包含物的体内生物利用度。",
+                "evidence_basis_description": "作者建议的后续研究方向。",
+                "scope_description": None,
+                "author_hedging": "should",
+                "locator_hint": {
+                    "page": 1,
+                    "section_heading": "Conclusion",
                 },
                 "entities": [],
             },
         ]
-
-
-# ── DeepSeek Provider ──────────────────────────────────
-
 class DeepSeekProvider:
     """Calls the DeepSeek API with thinking mode enabled.
 
@@ -216,21 +281,45 @@ class DeepSeekProvider:
 
         for attempt in range(1, self._max_retries + 1):
             try:
-                result = self._call_api(request)
-                output_hash = _compute_hash(result)
+                raw = self._call_api(request)
+                parsed = parse_claim_response(raw)
+                output_hash = _compute_hash(raw)
+
+                if parsed["status"] == "invalid_json":
+                    if attempt < self._max_retries:
+                        wait = 2**attempt
+                        time.sleep(wait)
+                        continue
+                    return ExtractionResponse(
+                        error=(
+                            f"Invalid JSON after {self._max_retries} "
+                            f"attempts: {parsed['errors']}"
+                        ),
+                        raw_response=raw,
+                        model_name=self._model,
+                        prompt_version=self._prompt_version,
+                        input_hash=input_hash,
+                        output_hash=output_hash,
+                        retries=attempt,
+                    )
+
                 return ExtractionResponse(
-                    claims=[],
-                    raw_response=result,
+                    claims=parsed["claims"],
+                    raw_response=raw,
                     model_name=self._model,
                     prompt_version=self._prompt_version,
                     input_hash=input_hash,
                     output_hash=output_hash,
                     retries=attempt - 1,
+                    error=(
+                        parsed["errors"][0] if parsed["errors"] else None
+                    ),
                 )
+
             except Exception as e:
                 last_error = str(e)
                 if attempt < self._max_retries:
-                    wait = 2**attempt  # Exponential backoff
+                    wait = 2**attempt
                     time.sleep(wait)
 
         return ExtractionResponse(
@@ -254,9 +343,9 @@ class DeepSeekProvider:
                     {"role": "system", "content": self._get_system_prompt()},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.1,
                 "max_tokens": 8192,
                 "response_format": {"type": "json_object"},
+                "reasoning_effort": "max",
             }
         ).encode("utf-8")
 
@@ -269,7 +358,7 @@ class DeepSeekProvider:
             },
         )
 
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             body: dict[str, Any] = json.loads(resp.read().decode("utf-8"))
             content: str = body["choices"][0]["message"]["content"]
             return content
@@ -280,7 +369,7 @@ class DeepSeekProvider:
             "Extract claims exactly as stated by the authors. "
             "Preserve hedging language (suggests, may, possibly). "
             "Distinguish observations from interpretations. "
-            "Always return valid JSON."
+            "Always return valid JSON with a 'claims' array."
         )
 
     def _build_prompt(self, request: ExtractionRequest) -> str:

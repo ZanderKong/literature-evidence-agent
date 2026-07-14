@@ -5,12 +5,11 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from evidence_agent.config import config
 from evidence_agent.database.connection import get_connection
 from evidence_agent.ids import generate_asset_id, generate_source_id, now_iso
 from evidence_agent.ingest.hashing import sha256_file
+from evidence_agent.runtime import RuntimeContext, get_current_context
 
-# PDF magic bytes
 PDF_MAGIC = b"%PDF-"
 
 
@@ -38,13 +37,13 @@ def validate_file(path: Path) -> dict[str, str | int | bool | None]:
         result["error"] = f"File is empty: {path}"
         return result
 
-    if file_size > config.max_file_size:
+    max_size = int(100 * 1024 * 1024)
+    if file_size > max_size:
         result["error"] = (
-            f"File too large: {file_size} bytes (max: {config.max_file_size})"
+            f"File too large: {file_size} bytes (max: {max_size})"
         )
         return result
 
-    # Check PDF magic bytes
     with open(path, "rb") as f:
         header = f.read(5)
 
@@ -52,7 +51,6 @@ def validate_file(path: Path) -> dict[str, str | int | bool | None]:
         result["error"] = f"Not a valid PDF (missing %PDF- header): {path}"
         return result
 
-    # Check PDF trailer
     with open(path, "rb") as f:
         if file_size > 1024:
             f.seek(-1024, 2)
@@ -67,20 +65,21 @@ def validate_file(path: Path) -> dict[str, str | int | bool | None]:
 
 
 def import_pdf(
-    file_path: Path, db_path: Path | None = None
+    file_path: Path,
+    db_path: Path | None = None,
+    ctx: RuntimeContext | None = None,
 ) -> dict[str, Any]:
     """Import a PDF file.
 
     Args:
         file_path: Path to the PDF file.
         db_path: Optional database path override (for testing).
+        ctx: Optional RuntimeContext (uses current thread context if None).
 
-    Returns dict with:
-        - source_id: str
-        - is_new: bool
-        - package_dir: Path
-        - sha256: str
+    Returns dict with source_id, is_new, package_dir, sha256, file_size.
     """
+    runtime = ctx or get_current_context()
+
     # 1. Validate
     validation = validate_file(file_path)
     if not validation["valid"]:
@@ -98,9 +97,8 @@ def import_pdf(
         existing = cursor.fetchone()
 
     if existing:
-        # Return existing source (idempotent)
         source_id = existing[0]
-        package_dir = config.sources_dir / source_id
+        package_dir = runtime.sources_dir / source_id
         return {
             "source_id": source_id,
             "is_new": False,
@@ -113,7 +111,7 @@ def import_pdf(
     source_id = generate_source_id()
     asset_id = generate_asset_id()
     now = now_iso()
-    package_dir = config.sources_dir / source_id
+    package_dir = runtime.sources_dir / source_id
 
     # 5. Create package directories
     original_dir = package_dir / "original"
@@ -124,13 +122,12 @@ def import_pdf(
     for d in [original_dir, parsed_dir, analysis_dir, provenance_dir]:
         d.mkdir(parents=True, exist_ok=True)
 
-    # 6. Copy original file
-    dest_path = original_dir / file_path.name
+    # 6. Copy original file as main.pdf
+    dest_path = original_dir / "main.pdf"
     shutil.copy2(file_path, dest_path)
 
     # 7. Verify copy hash
     if sha256_file(dest_path) != file_hash:
-        # Cleanup on hash mismatch
         shutil.rmtree(package_dir, ignore_errors=True)
         raise RuntimeError(
             f"Hash mismatch after copy! Original: {file_hash}, "
@@ -164,7 +161,7 @@ def import_pdf(
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
 
     # 9. Write to database
-    with get_connection() as conn:
+    with get_connection(db_path) as conn:
         conn.execute(
             "INSERT INTO sources (source_id, source_type, title, "
             "original_file_sha256, origin_scope, scientific_verification_status, "

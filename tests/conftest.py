@@ -1,62 +1,40 @@
-"""Shared pytest fixtures for all tests."""
+"""Shared pytest fixtures for all tests.
 
-import importlib
-import os
+Uses RuntimeContext + use_context() for proper isolation.
+No importlib.reload anywhere.
+"""
+
 import tempfile
 from pathlib import Path
 
 import pytest
 
-
-def _reload_config(workspace: Path) -> None:
-    """Set workspace env var and reload config module."""
-    os.environ["EVIDENCE_AGENT_WORKSPACE"] = str(workspace)
-
-    # Reload config so the singleton picks up the new env var
-    import evidence_agent.config
-    importlib.reload(evidence_agent.config)
-
-    # Also reload modules that import config at module level
-    import evidence_agent.database.connection
-    importlib.reload(evidence_agent.database.connection)
-
-
-def _cleanup_config() -> None:
-    """Remove env override and reload."""
-    os.environ.pop("EVIDENCE_AGENT_WORKSPACE", None)
-
-    import evidence_agent.config
-    importlib.reload(evidence_agent.config)
-
-    import evidence_agent.database.connection
-    importlib.reload(evidence_agent.database.connection)
+from evidence_agent.runtime import RuntimeContext, use_context
 
 
 @pytest.fixture
 def tmp_workspace() -> Path:
-    """Create a temporary workspace for testing."""
+    """Simple temporary directory for tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir)
-        yield workspace
+        yield Path(tmpdir)
 
 
 @pytest.fixture
-def migrated_workspace() -> Path:
-    """Create a temp workspace with a migrated database.
+def runtime_context(tmp_path: Path) -> RuntimeContext:
+    """Create an isolated RuntimeContext with migrated database."""
+    ws = tmp_path / "lea-ws"
+    ws.mkdir()
+    ctx = RuntimeContext(str(ws))
+    ctx.ensure_directories()
 
-    Sets EVIDENCE_AGENT_WORKSPACE env var so that all config paths
-    point to the temp workspace.
-    """
-    with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir)
-        _reload_config(workspace)
+    from evidence_agent.database.migrations import migrate
+    migrate(ctx.db_path)
 
-        from evidence_agent.config import config
-        config.ensure_directories()
+    with use_context(ctx):
+        yield ctx
 
-        from evidence_agent.database.migrations import migrate
-        migrate()
 
-        yield workspace
-
-        _cleanup_config()
+@pytest.fixture
+def migrated_workspace(runtime_context: RuntimeContext) -> Path:
+    """Backward-compat: returns workspace_path for old tests."""
+    return runtime_context.workspace_path

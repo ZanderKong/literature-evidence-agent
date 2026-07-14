@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e ".[dev]"
+      - run: pip install pytest-randomly
+      - run: ruff check .
+      - run: python -m mypy src
+      - run: pytest -q -m "not live_deepseek" --randomly-seed=1
+      - run: python -c "
+        from evidence_agent.database.migrations import check;
+        r = check();
+        assert r['integrity'] == 'ok';
+        assert r['version'] >= 5;
+        print(f'DB check OK: version={r[\"version\"]}')
+        "
+      - run: python scripts/release_gate.py --version 0.1.1 --mode ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: reports-py${{ matrix.python-version }}
+          path: artifacts/release/0.1.1/
+
+  live:
+    if: github.event_name == 'workflow_dispatch' && vars.EVIDENCE_AGENT_LLM_API_KEY != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: pytest -m live_deepseek -q
+        env:
+          EVIDENCE_AGENT_LLM_API_KEY: ${{ secrets.EVIDENCE_AGENT_LLM_API_KEY }}

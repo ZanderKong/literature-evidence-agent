@@ -37,20 +37,22 @@ class TestMigrations:
     def test_empty_db_migration(self, tmp_db: Path):
         """Migrate an empty database and verify all tables exist."""
         applied = migrate(tmp_db)
-        assert len(applied) == 3
+        assert len(applied) == 5
         assert applied[0] == (1, "001_initial.sql")
         assert applied[1] == (2, "002_fts.sql")
         assert applied[2] == (3, "003_constraints.sql")
+        assert applied[3] == (4, "004_review_batches.sql")
+        assert applied[4] == (5, "005_review_integrity.sql")
 
         conn = connect(tmp_db)
         version = get_current_version(conn)
         conn.close()
-        assert version == 3
+        assert version == 5
 
     def test_repeat_migration_is_idempotent(self, tmp_db: Path):
         """Running migration twice should not error or duplicate."""
         first = migrate(tmp_db)
-        assert len(first) == 3
+        assert len(first) == 5
 
         second = migrate(tmp_db)
         assert len(second) == 0  # No new migrations
@@ -58,7 +60,7 @@ class TestMigrations:
         conn = connect(tmp_db)
         version = get_current_version(conn)
         conn.close()
-        assert version == 3
+        assert version == 5
 
     def test_all_tables_exist(self, tmp_db: Path):
         """Verify all expected tables are created."""
@@ -269,7 +271,7 @@ class TestDatabaseCheck:
         migrate(tmp_db)
         results = check(tmp_db)
 
-        assert results["version"] == 3
+        assert results["version"] == 5
         assert results["integrity"] == "ok"
         assert results["foreign_keys"] == "ok"
         assert len(results["tables"]) >= 12
@@ -292,7 +294,7 @@ class TestRebuild:
     def test_rebuild_from_empty(self, tmp_db: Path):
         """Rebuild on empty should work."""
         applied = rebuild(tmp_db)
-        assert len(applied) == 3
+        assert len(applied) == 5
 
     def test_rebuild_after_migration(self, tmp_db: Path):
         """Rebuild after migration should drop and recreate."""
@@ -311,7 +313,7 @@ class TestRebuild:
 
         # Rebuild
         applied = rebuild(tmp_db)
-        assert len(applied) == 3
+        assert len(applied) == 5
 
         # Data should be gone
         conn = connect(tmp_db)

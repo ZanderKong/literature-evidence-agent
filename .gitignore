@@ -9,8 +9,8 @@ build/
 .eggs/
 
 # Virtual environments
-.venv/
-venv/
+.venv*/
+venv*/
 env/
 
 # IDE
@@ -24,6 +24,8 @@ env/
 .env.local
 
 # Workspace data
+*.sqlite-shm
+*.sqlite-wal
 workspace/external_evidence/evidence.sqlite
 workspace/external_evidence/sources/
 workspace/external_evidence/review/

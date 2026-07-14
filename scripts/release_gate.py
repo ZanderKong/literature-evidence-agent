@@ -4,13 +4,26 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
+import tomllib
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as pkg_version
 from pathlib import Path
 from typing import Any
 
 ARTIFACTS_DIR = Path("artifacts/release")
+
+
+def read_pyproject_version() -> str:
+    data = tomllib.loads(Path("pyproject.toml").read_text())
+    return data["project"]["version"]
+
+
+def release_line(version: str) -> str:
+    return re.sub(r"rc\d+$", "", version)
 
 
 def run(cmd: list[str], output_file: Path | None = None,
@@ -51,16 +64,26 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
             ["git", "status", "--porcelain"],
             capture_output=True, text=True,
         ).stdout.strip() != ""
-        report["git"] = {"branch": branch, "sha": sha, "dirty": dirty}
+        tags_raw = subprocess.run(
+            ["git", "tag", "--points-at", "HEAD"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        exact_tags = [t for t in tags_raw.split("\n") if t] if tags_raw else []
+        report["git"] = {
+            "branch": branch, "sha": sha, "dirty": dirty,
+            "exact_tags": exact_tags,
+        }
     except Exception:
         report["git"] = {"error": "git_unavailable"}
 
     def add(name: str, passed: bool, evidence: str = "",
-            exit_code: int = 0, duration: float = 0) -> None:
+            exit_code: int = 0, duration: float = 0,
+            evidence_file: str | None = None) -> None:
         report["checks"].append({
             "name": name, "status": "PASS" if passed else "FAIL",
             "exit_code": exit_code, "duration_seconds": round(duration, 1),
             "evidence": evidence[:300],
+            "evidence_file": evidence_file,
         })
 
     # Git clean (release mode only)
@@ -71,15 +94,47 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
         return report
     add("git_clean", True, "clean")
 
+    # Version consistency
+    try:
+        pv = read_pyproject_version()
+        pv_rl = release_line(pv)
+        cli_rl = release_line(version)
+        pkg_ver = "unknown"
+        try:
+            pkg_ver = pkg_version("literature-evidence-agent")
+        except PackageNotFoundError:
+            pass
+        pkg_rl = release_line(pkg_ver)
+        evidence_agent_out = subprocess.run(
+            ["evidence-agent", "--version"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        ea_rl = release_line(evidence_agent_out) if evidence_agent_out else "unknown"
+
+        vc_parts = []
+        if pv_rl != cli_rl:
+            vc_parts.append(f"pyproject_RL={pv_rl} vs arg_RL={cli_rl}")
+        if pkg_rl != cli_rl:
+            vc_parts.append(f"pkg_RL={pkg_rl} vs arg_RL={cli_rl}")
+        if ea_rl != cli_rl:
+            vc_parts.append(f"cli_RL={ea_rl} vs arg_RL={cli_rl}")
+        vc_ok = len(vc_parts) == 0
+        add("version_consistency", vc_ok,
+            "; ".join(vc_parts) if vc_parts else f"all={cli_rl}")
+    except Exception as e:
+        add("version_consistency", False, str(e)[:200])
+
     # Ruff
     t0 = time.time()
     rc, _ = run(["python", "-m", "ruff", "check", "."], out_dir / "ruff.txt")
-    add("ruff", rc == 0, f"exit={rc}", rc, time.time() - t0)
+    add("ruff", rc == 0, f"exit={rc}", rc, time.time() - t0,
+        evidence_file="ruff.txt")
 
     # Mypy
     t0 = time.time()
     rc, _ = run(["python", "-m", "mypy", "src"], out_dir / "mypy.txt")
-    add("mypy", rc == 0, f"exit={rc}", rc, time.time() - t0)
+    add("mypy", rc == 0, f"exit={rc}", rc, time.time() - t0,
+        evidence_file="mypy.txt")
 
     # Pytest 3x
     for i in range(1, 4):
@@ -88,7 +143,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
             ["pytest", "-q", "-m", "not live_deepseek"],
             out_dir / f"pytest-run-{i}.txt",
         )
-        add(f"pytest_{i}", rc == 0, f"exit={rc}", rc, time.time() - t0)
+        add(f"pytest_{i}", rc == 0, f"exit={rc}", rc, time.time() - t0,
+            evidence_file=f"pytest-run-{i}.txt")
 
     # Random seeds
     for seed in [1, 2, 3]:
@@ -98,7 +154,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
              "-m", "not live_deepseek"],
             out_dir / f"pytest-seed-{seed}.txt",
         )
-        add(f"seed_{seed}", rc == 0, f"exit={rc}", rc, time.time() - t0)
+        add(f"seed_{seed}", rc == 0, f"exit={rc}", rc, time.time() - t0,
+            evidence_file=f"pytest-seed-{seed}.txt")
 
     # Golden fixture conformance
     t0 = time.time()
@@ -113,7 +170,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
     except Exception:
         pass
     add("golden_fixture", rc == 0,
-        f"exit={rc} pass={gfd.get('all_thresholds_pass')}", rc, time.time() - t0)
+        f"exit={rc} pass={gfd.get('all_thresholds_pass')}", rc, time.time() - t0,
+        evidence_file="golden-fixture.txt")
 
     # Golden pipeline smoke
     t0 = time.time()
@@ -128,7 +186,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
     except Exception:
         pass
     add("golden_smoke", rc == 0,
-        f"exit={rc} result={gps.get('result')}", rc, time.time() - t0)
+        f"exit={rc} result={gps.get('result')}", rc, time.time() - t0,
+        evidence_file="golden-pipeline-smoke.txt")
 
     # README smoke
     t0 = time.time()
@@ -143,7 +202,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
     except Exception:
         pass
     add("readme_smoke", rc == 0,
-        f"exit={rc} result={rs.get('result')}", rc, time.time() - t0)
+        f"exit={rc} result={rs.get('result')}", rc, time.time() - t0,
+        evidence_file="readme-smoke.txt")
 
     # Verify
     t0 = time.time()
@@ -151,7 +211,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
         ["evidence-agent", "verify", "--round-name", "round1"],
         out_dir / "verify.txt",
     )
-    add("verify", rc == 0, f"exit={rc}", rc, time.time() - t0)
+    add("verify", rc == 0, f"exit={rc}", rc, time.time() - t0,
+        evidence_file="verify.txt")
 
     # CLI E2E
     t0 = time.time()
@@ -159,7 +220,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
         ["pytest", "tests/e2e/test_cli_round1_rc2.py", "-q"],
         out_dir / "cli_e2e.txt",
     )
-    add("cli_e2e", rc == 0, f"exit={rc}", rc, time.time() - t0)
+    add("cli_e2e", rc == 0, f"exit={rc}", rc, time.time() - t0,
+        evidence_file="cli_e2e.txt")
 
     # Snapshot/Rebuild
     t0 = time.time()
@@ -171,7 +233,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
          "tests/regression/test_rebuild_identity.py", "-q"],
         out_dir / "snapshot_rebuild.txt",
     )
-    add("snapshot_rebuild", rc == 0, f"exit={rc}", rc, time.time() - t0)
+    add("snapshot_rebuild", rc == 0, f"exit={rc}", rc, time.time() - t0,
+        evidence_file="snapshot_rebuild.txt")
 
     # Review workflow
     t0 = time.time()
@@ -181,7 +244,8 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
          "tests/regression/test_review_edit_revalidation.py", "-q"],
         out_dir / "review_workflow.txt",
     )
-    add("review_workflow", rc == 0, f"exit={rc}", rc, time.time() - t0)
+    add("review_workflow", rc == 0, f"exit={rc}", rc, time.time() - t0,
+        evidence_file="review_workflow.txt")
 
     # Live DeepSeek
     api_key = os.getenv("EVIDENCE_AGENT_LLM_API_KEY")
@@ -191,9 +255,11 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
             ["pytest", "-m", "live_deepseek", "-q"],
             out_dir / "live_deepseek.txt",
         )
-        add("live_deepseek", rc == 0, f"exit={rc}", rc, time.time() - t0)
+        add("live_deepseek", rc == 0, f"exit={rc}", rc, time.time() - t0,
+            evidence_file="live_deepseek.txt")
     else:
-        add("live_deepseek", True, "BLOCKED_EXTERNAL")
+        add("live_deepseek", True, "BLOCKED_EXTERNAL",
+            evidence_file=None)
         if mode == "release":
             report["result"] = "PASS_OFFLINE_LIVE_BLOCKED"
 
@@ -204,15 +270,30 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
     paths = secrets.stdout.split("\0")
     violations = []
     for p in paths:
-        if not p: continue
+        if not p:
+            continue
         if any(x in p for x in [".venv", "__pycache__", ".pyc"]):
-            violations.append(p)
+            violations.append(f"build_artifact:{p}")
         if p.endswith((".sqlite", ".sqlite3", ".db", ".sqlite-wal", ".sqlite-shm")):
-            violations.append(p)
+            violations.append(f"database_file:{p}")
         if p.endswith(".env") and p != ".env.example":
-            violations.append(p)
+            violations.append(f"env_file:{p}")
+        if p.endswith((".pem", ".key", ".crt", ".cer")):
+            violations.append(f"certificate_key:{p}")
+        if any(kw in Path(p).name.lower() for kw in ["id_rsa", "id_ed25519",
+                "id_ecdsa", "credentials", "secret", "private_key"]):
+            violations.append(f"secret_filename:{p}")
+        fp = Path(p)
+        if fp.is_file():
+            size = fp.stat().st_size
+            if size > 10 * 1024 * 1024:
+                if not any(p.startswith(a) for a in [
+                    "tests/fixtures/", "tests/fixtures/golden/",
+                ]):
+                    violations.append(f"large_file({size//1024//1024}MB):{p}")
     add("repo_hygiene", len(violations) == 0,
-        f"violations={len(violations)}", 0 if not violations else 1)
+        f"violations={len(violations)}" if violations else "clean",
+        0 if not violations else 1)
 
     all_pass = all(c["status"] == "PASS" for c in report["checks"])
     if not all_pass:

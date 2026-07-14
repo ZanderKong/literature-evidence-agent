@@ -218,19 +218,23 @@ See current state below.
 - Initial CI added (ruff + mypy + pytest)
 - Still needs: offline verify, Golden evaluator, artifact uploads
 
+## Phase D01-D04 / E02-E05 (Subsequent Work)
+
+D02 (CLI E2E), D03 (Golden Set), D04 (DeepSeek smoke), E02 (README),
+E03 (execution log final), E04 (completion report), E05 (repo hygiene)
+remain for a subsequent session.
+
 ## Phase E06: Review Tag
 
-- Status: **premature_tag_created**
-- round1.1-rc2-review-01 created prematurely from incomplete state
-- Must not be used for formal Independent Review
-- Final tag will be round1.1-rc2-review-02
+- round1.1-rc2-review-01 — premature, DO NOT USE
+- round1.1-rc2-review-02 — current review candidate (fb52729)
 
 ---
 
-## Current Final State (commit 2f6b915)
+## Current Final State (commit fb52729)
 
-- **Tests**: 179 passing / 0 failing
-- **Ruff src**: clean (6 pre-existing test file issues)
+- **Tests**: 185 passing / 0 failing (verified 3x in a row)
+- **Ruff src**: clean
 - **Mypy**: clean
 - **Migrations**: 5 versions (001-005)
 
@@ -240,17 +244,18 @@ See current state below.
 A01-A07 verified
 B01-B05 verified
 
-C01 not_started
-C02 verified
-C03 in_progress
-C04 in_progress
+C01 verified (package snapshot)
+C02 verified (atomic migration)
+C03 verified (precise rebuild)
+C04 verified (database compare)
 
-D01 provisional
-D02-D04 not_started
+D01 provisional (verify exists, needs revalidation with C01/C03/C04)
+D02 not_started (CLI E2E)
+D03 not_started (Golden Set)
+D04 not_started (DeepSeek smoke)
 
-E01 in_progress
-E02-E05 not_started
-E06 premature_tag_created (round1.1-rc2-review-01 — do not use for review)
+E01 in_progress (CI workflow exists, needs offline verify + Golden evaluator)
+E02-E06 pending
 ```
 
 ### Hard Gate Status
@@ -264,9 +269,17 @@ E06 premature_tag_created (round1.1-rc2-review-01 — do not use for review)
 | 5 | Edited quote/locator revalidation | ✅ Pass |
 | 6 | Approved/rejected FTS sync | ✅ Pass |
 | 7 | Package rebuild restores state | ✅ Pass |
-| 8 | verify round1 — real checks | ✅ Pass |
+| 8 | verify round1 | ✅ Pass (provisional) |
 | 9 | E2E with real PDF | ⚠️ Pending D02 |
 | 10 | Golden Set bilingual | ⚠️ Pending D03 |
+| 11 | External data isolation | ✅ Pass |
+| 12 | README/logs/reports consistent | ⚠️ Pending E02-E05 |
+
+### Gate Reports
+
+- GATE_B_REPORT.md: ✅ (docs/reviews/round1_rc2/gates/)
+- GATE_C_REPORT.md: ✅ (docs/reviews/round1_rc2/gates/)
+- GATE_D_REPORT.md: ✅ CONDITIONAL (docs/reviews/round1_rc2/gates/)
 | 11 | External data isolation | ✅ Pass |
 | 12 | README/logs/reports consistent | ⚠️ Pending E02-E05 |
 

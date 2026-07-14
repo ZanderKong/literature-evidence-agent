@@ -177,13 +177,14 @@ See current state below.
 - refresh_task_status() called after analyse complete and review apply
 - Multi-source aware
 
-## Phase C03: Precise Rebuild
+## Phase C01: Immutable Source State Snapshot
 
-- Status: verified
-- Commit: 2a84602
-- All 3 rebuild tests now PASS (179 pass / 0 fail)
-- locator_id preserved in claims.persisted.jsonl
-- Review decisions/revisions read from package review/ directory
+- Status: **not_started**
+- Package sync/check/list CLI
+- Manifest schema, hash, count
+- Save all runs, claims, locators, tasks, entities, links, review batches, rows, decisions, revisions
+- Staging + fsync + atomic current pointer
+- Auto-sync after analyse and review apply
 
 ## Phase C02: Atomic Migration Runner
 
@@ -193,24 +194,43 @@ See current state below.
 - Rebuild now calls migrate() directly
 - replace=True required to overwrite existing target DB
 
+## Phase C03: Precise Rebuild
+
+- Status: **in_progress**
+- Commit: 2a84602 (initial fix — 3 rebuild tests pass)
+- Still needs: preflight all packages, ban INSERT OR IGNORE, temp DB staging
+- Same ID + different hash → overall fail
+- Restore all runs, batches, rows, decisions, revisions, entities, links
+- integrity_check, foreign_key_check
+- Expected/restored count, ID, hash, status comparison
+
 ## Phase C04: DB Summary & Compare
 
-- Status: verified
-- Commit: 372a650
-- state_compare.py: snapshot_summary() and compare_databases()
-- CLI: db snapshot-summary, db compare
+- Status: **in_progress**
+- Commit: 372a650 (initial version — snapshot_summary + compare_databases)
+- Still needs: per-table ID set comparison, canonical row content hash comparison
+- Review decisions/revisions comparison, FTS fixture query result comparison
+- Exit 7 on any difference
 
 ## Phase E01: GitHub Actions CI
 
-- Status: verified
-- .github/workflows/ci.yml: ruff + mypy + pytest for Python 3.11/3.12
+- Status: **in_progress**
+- Initial CI added (ruff + mypy + pytest)
+- Still needs: offline verify, Golden evaluator, artifact uploads
+
+## Phase E06: Review Tag
+
+- Status: **premature_tag_created**
+- round1.1-rc2-review-01 created prematurely from incomplete state
+- Must not be used for formal Independent Review
+- Final tag will be round1.1-rc2-review-02
 
 ---
 
-## Current Final State (commit 372a650)
+## Current Final State (commit 2f6b915)
 
 - **Tests**: 179 passing / 0 failing
-- **Ruff**: clean
+- **Ruff src**: clean (6 pre-existing test file issues)
 - **Mypy**: clean
 - **Migrations**: 5 versions (001-005)
 
@@ -219,11 +239,18 @@ See current state below.
 ```text
 A01-A07 verified
 B01-B05 verified
-C01-C04 verified
-D01 provisional (verify round1 exists)
-D02-D04 not_started (E2E/Golden/DeepSeek smoke)
-E01 verified (CI workflow)
-E02-E06 not_started (README/logs/review tag)
+
+C01 not_started
+C02 verified
+C03 in_progress
+C04 in_progress
+
+D01 provisional
+D02-D04 not_started
+
+E01 in_progress
+E02-E05 not_started
+E06 premature_tag_created (round1.1-rc2-review-01 — do not use for review)
 ```
 
 ### Hard Gate Status

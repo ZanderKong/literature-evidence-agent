@@ -8,19 +8,22 @@ import json
 from pathlib import Path
 from typing import Any
 
-from evidence_agent.database.connection import connect, transaction
+from evidence_agent.database.connection import transaction
 from evidence_agent.runtime import get_current_context
 
 
 def rebuild_from_packages(
     source_dir: Path | None = None,
     target_db: Path | None = None,
+    *,
+    replace: bool = False,
 ) -> dict[str, Any]:
     """Rebuild database from all source packages.
 
     Args:
         source_dir: Path to sources/ directory. If None, uses current context.
         target_db: Path to target database file. If None, uses current context.
+        replace: Must be True to overwrite an existing target DB.
 
     Returns rebuild report with counts.
     """
@@ -37,40 +40,16 @@ def rebuild_from_packages(
     if not source_dir.exists():
         raise FileNotFoundError(f"Sources directory not found: {source_dir}")
 
-    # Initialize fresh database
-    target_db.parent.mkdir(parents=True, exist_ok=True)
-    if target_db.exists():
-        target_db.unlink()
-
-    # Migrate target directly without mutating env vars
-    target_conn = connect(target_db)
-    try:
-        # Build migration schema on target
-        from evidence_agent.database.migrations import (
-            MIGRATIONS,
-            get_current_version,
-            get_migrations_dir,
+    if target_db.exists() and not replace:
+        raise FileExistsError(
+            f"Target database {target_db} already exists. "
+            f"Use replace=True to overwrite."
         )
-        current = get_current_version(target_conn)
-        for version, name in MIGRATIONS:
-            if version > current:
-                path = get_migrations_dir() / name
-                sql = path.read_text(encoding="utf-8")
-                for statement in sql.split(";"):
-                    statement = statement.strip()
-                    if not statement:
-                        continue
-                    try:
-                        target_conn.execute(statement)
-                    except Exception:
-                        pass
-                target_conn.execute(
-                    "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
-                    (version, name),
-                )
-        target_conn.commit()
-    finally:
-        target_conn.close()
+
+    target_db.parent.mkdir(parents=True, exist_ok=True)
+
+    from evidence_agent.database.migrations import migrate
+    migrate(target_db)
 
     report: dict[str, Any] = {
         "target_db": str(target_db),

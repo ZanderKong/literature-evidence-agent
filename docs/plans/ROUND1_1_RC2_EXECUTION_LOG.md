@@ -227,31 +227,91 @@ remain for a subsequent session.
 ## Phase D01: Verify Rewrite (RuntimeContext isolation)
 
 - Status: verified
-- Commit: ac8fb44
-- RuntimeContext-based (no env mutation, no importlib.reload)
-- Save/restore caller context
-- database_rebuild: full sync → check → rebuild → compare cycle
+- Commit: 47c93a9
+- RuntimeContext-based (no env mutation, no importlib.reload), save/restore context
+- Full sync → check → rebuild → compare cycle in database_rebuild
+- Destructive tests: locator delete, FTS clear, origin_scope tamper
 
 ## Phase D02: CLI E2E
 
 - Status: verified
-- Commit: 598ca91
-- Full CLI cycle: task → ingest → parse → analyse → review → query → package → compare
-- 1 E2E test pass
+- Commit: 47c93a9
+- Strict exit 0 assertions (no "acceptable failure" ranges)
+- Covers approve, approve_with_edits, reject
+- db compare exit 0 verified
 
 ## Phase D03: Golden Set
 
-- Status: verified (conditional — basic framework + evaluator)
-- Commit: 18fa923
-- 32-item golden set (24 positive + 8 negative, 9 claim types)
-- Evaluator computes recall, negative extraction, quote, locator, type, hedging, scope
-- Thresholds defined (80% recall, 85% type, 95% hedging, 90% scope)
-- D04 added: DeepSeek smoke with live_deepseek marker
+- Status: verified
+- Commit: 907bda2
+- 40-item golden set (32 positive + 8 negative, EN+CN, 9 claim types)
+- Per-annotation matching evaluator with unsupported_accepted
+- Thresholds: recall≥80, type≥85, hedging≥95, scope≥90, quote=100, locator=100, negative=0, unsupported=0
 
-## Phase E01: GitHub Actions CI (updated)
+## Phase D04: DeepSeek Live Smoke
 
-- Commit: (included in final)
-- CI now includes: ruff, mypy, pytest (-m "not live_deepseek"), golden evaluator check, DB version check
+- Status: conditional (skipped without API key, code verified)
+- Commit: 47c93a9
+- Full ExtractionRequest fields, dataclasses.asdict, quote validation
+- Only skips on missing API key; all other errors FAIL
+
+## Phase G1 (Rebuild Routing): INVALID/ABSENT/VALID states
+
+- Status: verified
+- Commit: e2b1a41
+- _try_new_snapshot returns (status, dict), INVALID throws RebuildIntegrityError
+- No fallback to old format on tampered snapshot
+
+## Phase G2 (Cross-reference): Complete validation
+
+- Status: verified
+- Commit: e2b1a41
+- run.task_id non-null → error (was: pass)
+- decision.review_row_id → validates row exists, batch match, claim match
+- batch.run_id must exist, batch.source_id must match snapshot source
+
+## Phase E01-E05
+
+- CI: ruff, mypy, pytest, golden evaluator check
+- Execution log updated
+- README pending (E02)
+
+## Phase E06: Review Tags
+
+- round1.1-rc2-review-01 — premature, DO NOT USE
+- round1.1-rc2-review-02 — C-stage intermediate, DO NOT USE
+- round1.1-rc2-review-03 — pre-review candidate, DO NOT USE
+- **round1.1-rc2-review-04 — CURRENT FINAL REVIEW CANDIDATE**
+
+---
+
+## Current Final State (commit 47c93a9)
+
+- **Tests**: 203 passing / 0 failing / 2 deselected (live_deepseek)
+- **3x pytest**: all pass
+- **3 random seeds**: all pass
+- **Ruff src**: clean
+- **Mypy**: clean
+- **Migrations**: 5 versions (001-005)
+- **Branch**: fix/round1.1-rc2-hardening
+- **Tag**: round1.1-rc2-review-04
+
+### Hard Gate Status
+
+| # | Gate | Status |
+|---|------|--------|
+| 1 | DeepSeek response parsing | ✅ Pass |
+| 2 | analyse entry point | ✅ Pass |
+| 3 | Tasks/sections/runs/claims/locators persistence | ✅ Pass |
+| 4 | Review export per run | ✅ Pass |
+| 5 | Edited quote/locator revalidation | ✅ Pass |
+| 6 | Approved/rejected FTS sync | ✅ Pass |
+| 7 | Package rebuild restores state | ✅ Pass (full cycle) |
+| 8 | verify round1 | ✅ Pass (destructive tests) |
+| 9 | E2E CLI pipeline | ✅ Pass (strict assertions) |
+| 10 | Golden Set bilingual | ✅ Pass (40 items) |
+| 11 | External data isolation | ✅ Pass |
+| 12 | DB compare canonical | ✅ Pass (exit 0) |
 
 ## Phase E06: Review Tags
 

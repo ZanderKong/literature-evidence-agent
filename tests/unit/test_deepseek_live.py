@@ -86,7 +86,10 @@ def test_deepseek_no_key_leaks_in_output():
     response = provider.extract_claims(request)
 
     if response.error:
-        pytest.skip(f"DeepSeek API error: {response.error}")
+        # With a valid key, API errors must FAIL, not skip
+        assert response.error == "", (
+            f"DeepSeek API error with valid key: {response.error}"
+        )
 
     response_dict = dataclasses.asdict(response)
     response_str = str(response_dict)

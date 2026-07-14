@@ -1,5 +1,34 @@
 # Independent Review — Literature Evidence Agent v0.1.1
 
+## Final Release Status
+
+- **Initial candidate**: `3c7557dcc9abde5170e0606f5d12c592256b31b4`
+- **Initial finding**: F-001 P1 (pytest.skip on API error)
+- **Fix status**: fixed in `b832a48`
+- **Final release SHA**: `6aff4e6c7a5f9f5b9114571fd77da4dff62231ad`
+- **Final tag**: `v0.1.1`
+- **Final branch**: `main`
+- **Final Verdict**: PASS
+- **Live DeepSeek**: BLOCKED_EXTERNAL
+
+### Post-fix verification for F-001
+
+- **Fix commit**: `b832a48`
+- **Test file**: `tests/unit/test_deepseek_live.py`
+- **Command**: `pytest test_deepseek_live.py -q`
+- **Result**: PASS (skips without key, fails with API error)
+- **Change**: Replaced `pytest.skip()` with assertion when API key is configured
+
+---
+
+## Initial Verdict (superseded)
+
+*The following is the original review content from the initial candidate. The final release status above supersedes the initial verdict of "PASS — with 1 P1 recommended fix" which has since been resolved.*
+
+---
+
+## Original Review
+
 - **Date**: 2026-07-14
 - **Candidate**: `3c7557dcc9abde5170e0606f5d12c592256b31b4`
 - **Branch**: `fix/round1.1-rc2-hardening`

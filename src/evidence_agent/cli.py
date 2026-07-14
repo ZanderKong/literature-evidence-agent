@@ -165,6 +165,54 @@ def reset() -> None:
         raise typer.Exit(code=3) from e
 
 
+@db_app.command()
+def snapshot_summary(
+    database: str = typer.Option(..., "--database", help="Path to SQLite database"),
+    output: str = typer.Option(None, "--output", help="Output path (stdout if omitted)"),
+) -> None:
+    """Compute structured summary of a database."""
+    from pathlib import Path
+
+    from evidence_agent.database.state_compare import snapshot_summary as run_summary
+
+    db_path = Path(database)
+    if not db_path.exists():
+        typer.echo(f"Database not found: {database}", err=True)
+        raise typer.Exit(code=3)
+
+    summary = run_summary(db_path)
+    text = json.dumps(summary, indent=2, default=str)
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+        typer.echo(f"Summary written to {output}")
+    else:
+        typer.echo(text)
+
+
+@db_app.command()
+def compare(
+    db_a: str = typer.Option(..., "--db-a", help="First database path"),
+    db_b: str = typer.Option(..., "--db-b", help="Second database path"),
+    output: str = typer.Option(None, "--output", help="Output path"),
+) -> None:
+    """Compare two databases and report differences. Exit 0 if identical, 7 if different."""
+    from pathlib import Path
+
+    from evidence_agent.database.state_compare import compare_databases
+
+    result = compare_databases(Path(db_a), Path(db_b))
+    text = json.dumps(result, indent=2, default=str)
+    if output:
+        Path(output).write_text(text, encoding="utf-8")
+    else:
+        typer.echo(text)
+
+    if result.get("error"):
+        raise typer.Exit(code=3)
+    if not result.get("identical", False):
+        raise typer.Exit(code=7)
+
+
 @app.command()
 def ingest(file: str) -> None:
     """Import a local PDF as an external source."""

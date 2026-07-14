@@ -124,43 +124,106 @@ See current state below.
 
 ---
 
-## Current State Summary (Phase H baseline: 3a077e0)
+## Phase H: Repository Hygiene
 
-- **Tests**: 169 passing / 3 failing
-- **Ruff**: 24 issues (fixable, addressed in Phase H cleanup)
+- Status: verified
+- Commits: 50e0d56, 3a077e0, 93ed610
+- Removed .venv-rc2 from tracking
+- Removed SQLite WAL/SHM from tracking
+- Updated AGENTS.md, created opencode.json, installed execution plan
+
+## Phase B01: Review Batch Stable Identity
+
+- Status: verified
+- Commit: 2085f7a
+- Migration 005: review integrity indexes
+- Idempotent batch creation (same packet hash → reuse batch/row IDs)
+- Deterministic claim ordering by page, claim_type, claim_id
+- Batch/row hash metadata in all export formats
+
+## Phase B02: Review Packet Context & Safety
+
+- Status: verified
+- Commit: 4e6ddc6
+- Full JOIN sourcing: sections, runs metadata, assets
+- extract_quote_context() with 240-char radius
+- HTML escape everywhere via _esc() helper
+- Atomic file writes (tmp → flush → fsync → os.replace)
+- Only relative paths in exports
+
+## Phase B03: Review Apply Batch Verification
+
+- Status: verified
+- Commit: 1cc2b2f
+- Batch-aware apply: validates batch exists, row belongs to batch, hash matches
+- Idempotent by (review_batch_id, review_row_id)
+- Batch status auto-derived (applied/partially_applied)
+- All-or-nothing transactional apply
+
+## Phase B04: FTS Lifecycle & Safe Queries
+
+- Status: verified
+- Commit: 471b710
+- compile_safe_query(): sanitizes FTS5 operators, escapes input
+- index_claim / replace_claim / remove_claim helpers
+- Richer search results (origin_scope, relative_path, section_heading)
+- Review-aware: only approved/approved_with_edits indexed
+
+## Phase B05: Task Lifecycle Derivation
+
+- Status: verified
+- Commit: a636c22
+- derive_task_status(): derives from claims review states
+- refresh_task_status() called after analyse complete and review apply
+- Multi-source aware
+
+## Phase C03: Precise Rebuild
+
+- Status: verified
+- Commit: 2a84602
+- All 3 rebuild tests now PASS (179 pass / 0 fail)
+- locator_id preserved in claims.persisted.jsonl
+- Review decisions/revisions read from package review/ directory
+
+## Phase C02: Atomic Migration Runner
+
+- Status: verified
+- Commit: d2f1871
+- Removed sql.split(";") + except Exception: pass from rebuild
+- Rebuild now calls migrate() directly
+- replace=True required to overwrite existing target DB
+
+## Phase C04: DB Summary & Compare
+
+- Status: verified
+- Commit: 372a650
+- state_compare.py: snapshot_summary() and compare_databases()
+- CLI: db snapshot-summary, db compare
+
+## Phase E01: GitHub Actions CI
+
+- Status: verified
+- .github/workflows/ci.yml: ruff + mypy + pytest for Python 3.11/3.12
+
+---
+
+## Current Final State (commit 372a650)
+
+- **Tests**: 179 passing / 0 failing
+- **Ruff**: clean
 - **Mypy**: clean
-- **Migrations**: 4 versions (001 initial, 002 FTS, 003 constraints, 004 review_batches)
-- **Phase H committed**: H00 freeze, H01 .venv-rc2 cleanup, H02 WAL/SHM cleanup
-
-### Remaining Failures (all rebuild, mapped to Phase C)
-
-| # | Test Node | Root Cause | Mapped To |
-|---|-----------|-----------|-----------|
-| 1 | `test_rebuild_loses_review_decisions` | rebuild doesn't import review_decisions from package | C03 |
-| 2 | `test_rebuild_loses_locator_ids` | rebuild regenerates locator IDs | C03 |
-| 3 | `test_rebuild_does_not_restore_decisions_and_revisions` | rebuild doesn't restore decisions/revisions | C03 |
+- **Migrations**: 5 versions (001-005)
 
 ### Status Markers
 
 ```text
-A01 verified
-A02 verified
-A03 verified
-A04 verified
-A05 verified
-A06 verified
-A07 verified
-
-B01 provisional_verified
-B02 not_started
-B03 provisional_verified
-B04 not_started
-B05 not_started
-
-C01-C04 not_started
-D01 provisional
-D02-D04 not_started
-E01-E06 not_started
+A01-A07 verified
+B01-B05 verified
+C01-C04 verified
+D01 provisional (verify round1 exists)
+D02-D04 not_started (E2E/Golden/DeepSeek smoke)
+E01 verified (CI workflow)
+E02-E06 not_started (README/logs/review tag)
 ```
 
 ### Hard Gate Status
@@ -173,9 +236,11 @@ E01-E06 not_started
 | 4 | Review export per run | ✅ Pass |
 | 5 | Edited quote/locator revalidation | ✅ Pass |
 | 6 | Approved/rejected FTS sync | ✅ Pass |
-| 7 | Package rebuild restores state | ❌ Fail (3 rebuild tests, mapped to Phase C) |
+| 7 | Package rebuild restores state | ✅ Pass |
 | 8 | verify round1 — real checks | ✅ Pass |
-| 9 | E2E with real PDF and strong assertions | ⚠️ To be verified in D02 |
-| 10 | Golden Set bilingual | ⚠️ Not yet started (D03) |
+| 9 | E2E with real PDF | ⚠️ Pending D02 |
+| 10 | Golden Set bilingual | ⚠️ Pending D03 |
 | 11 | External data isolation | ✅ Pass |
-| 12 | README/logs/reports consistent | ⚠️ Not yet updated (Phase E) |
+| 12 | README/logs/reports consistent | ⚠️ Pending E02-E05 |
+
+### NEXT_TASK: Freeze review candidate tag (E06)

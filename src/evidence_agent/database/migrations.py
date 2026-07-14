@@ -13,6 +13,7 @@ MIGRATIONS: list[tuple[int, str]] = [
     (2, "002_fts.sql"),
     (3, "003_constraints.sql"),
     (4, "004_review_batches.sql"),
+    (5, "005_review_integrity.sql"),
 ]
 
 

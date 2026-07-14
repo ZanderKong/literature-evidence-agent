@@ -1,9 +1,6 @@
 """Unit tests for RuntimeContext."""
 
-import os
-from pathlib import Path
 
-import pytest
 
 from evidence_agent.runtime import (
     RuntimeContext,

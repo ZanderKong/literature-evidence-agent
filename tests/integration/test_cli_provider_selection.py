@@ -1,10 +1,8 @@
 """Integration tests for CLI provider selection behavior."""
 
 from typer.testing import CliRunner
-import pytest
 
 from evidence_agent.cli import app
-
 
 runner = CliRunner()
 

@@ -5,7 +5,6 @@ These tests confirm the new implementation doesn't have the old flaws
 (table existence, COUNT >= 0, migration version only).
 """
 
-import pytest
 
 
 class TestVerifyRealChecks:
@@ -13,11 +12,11 @@ class TestVerifyRealChecks:
 
     def test_verify_creates_isolated_workspace(self, tmp_path):
         """verify must use its own independent workspace."""
-        from evidence_agent.verification.round1 import run_round1_verification
-
         # Point to a sample PDF for testing
         import shutil
         from pathlib import Path
+
+        from evidence_agent.verification.round1 import run_round1_verification
         fixtures = Path(__file__).resolve().parent.parent / "fixtures" / "sample_article.pdf"
         test_pdf = tmp_path / "test.pdf"
         if fixtures.exists():

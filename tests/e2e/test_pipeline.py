@@ -56,7 +56,7 @@ def test_database_check(migrated_workspace):
     """Database integrity should pass."""
     results = check()
     assert results["integrity"] == "ok"
-    assert results["version"] == 4
+    assert results["version"] == 5
 
 
 def test_external_data_isolation(migrated_workspace):

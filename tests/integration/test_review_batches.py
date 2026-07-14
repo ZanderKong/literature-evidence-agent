@@ -1,12 +1,11 @@
-"""Integration tests: review batches must be tracked in the database.
+"""Integration tests: review batches with stable identities.
 
-Current implementation:
-- generate_review_packet() reads claims and writes files
-- But there is NO review_batches table, NO batch rows
-- No dedup by content hash
-- No tracking of which batch a decision belongs to
+Batch identity is determined by (run_id, packet_sha256).
+Same claims content → same batch/row IDs (idempotent).
+Different claims content → new batch.
 """
 
+import csv
 import json
 
 import pytest
@@ -72,9 +71,7 @@ class TestReviewBatches:
 
         paths = generate_review_packet("RUN-rb1")
 
-        csv_path = paths["csv"]
-        import csv
-        with open(csv_path, encoding="utf-8") as f:
+        with open(paths["csv"], encoding="utf-8") as f:
             reader = csv.DictReader(f)
             rows = list(reader)
 
@@ -82,9 +79,8 @@ class TestReviewBatches:
             f"Expected 2 pending claims for RUN-rb1, got {len(rows)}"
         )
 
-    def test_review_batches_table_missing(self, setup):
-        """The review_batches table should exist in the schema.
-        Currently it does NOT exist — this test captures the gap."""
+    def test_review_batches_table_exists(self, setup):
+        """The review_batches table should exist in the schema."""
         from evidence_agent.database.connection import get_connection
 
         with get_connection(read_only=True) as conn:
@@ -95,26 +91,148 @@ class TestReviewBatches:
             exists = cursor.fetchone()
 
         assert exists is not None, (
-            "FLAW: review_batches table does not exist. "
-            "Current schema has no batch tracking."
+            "FLAW: review_batches table does not exist."
         )
 
-    def test_review_export_does_not_create_batch_records(self, setup):
-        """After review export, there should be batch records in DB.
-        Currently there are none."""
-        from evidence_agent.review.packet import generate_review_packet
+    def test_export_creates_batch_records(self, setup):
+        """After review export, there should be batch records in DB."""
         from evidence_agent.database.connection import get_connection
+        from evidence_agent.review.packet import generate_review_packet
 
         generate_review_packet("RUN-rb1")
 
         with get_connection(read_only=True) as conn:
-            try:
-                cursor = conn.execute("SELECT COUNT(*) as cnt FROM review_batches")
-                count = cursor.fetchone()["cnt"]
-            except Exception:
-                count = -1
+            cursor = conn.execute("SELECT COUNT(*) as cnt FROM review_batches")
+            count = cursor.fetchone()["cnt"]
 
         assert count > 0, (
-            f"FLAW: review export generated files but created {count} batch records. "
-            f"generate_review_packet() does not insert into review_batches table."
+            f"FLAW: export generated files but created {count} batch records."
         )
+
+    def test_same_packet_reuses_batch_id(self, setup):
+        """Same claims content should reuse the same review_batch_id."""
+        from evidence_agent.database.connection import get_connection
+        from evidence_agent.review.packet import generate_review_packet
+
+        paths1 = generate_review_packet("RUN-rb1")
+        paths2 = generate_review_packet("RUN-rb1")
+
+        assert paths1["batch_id"] == paths2["batch_id"], (
+            f"Expected same batch_id for identical content. "
+            f"Got {paths1['batch_id']} vs {paths2['batch_id']}"
+        )
+        assert paths1["packet_sha256"] == paths2["packet_sha256"]
+
+        with get_connection(read_only=True) as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) as cnt FROM review_batches"
+            )
+            cnt = cursor.fetchone()["cnt"]
+        assert cnt == 1, f"Expected 1 batch, found {cnt}"
+
+    def test_same_packet_reuses_row_ids(self, setup):
+        """Same claims content should reuse the same review_row_ids."""
+        from evidence_agent.review.packet import generate_review_packet
+
+        paths1 = generate_review_packet("RUN-rb1")
+        paths2 = generate_review_packet("RUN-rb1")
+
+        # Read CSV to extract row IDs
+        def read_csv_batch_info(csv_path):
+            with open(csv_path, encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                return [(r["claim_id"], r["review_row_id"]) for r in reader]
+
+        rows1 = read_csv_batch_info(paths1["csv"])
+        rows2 = read_csv_batch_info(paths2["csv"])
+
+        assert rows1 == rows2, (
+            f"Expected same row IDs for identical content. "
+            f"Got {rows1} vs {rows2}"
+        )
+
+    def test_changed_claim_creates_new_batch(self, setup):
+        """Different claims content should create a new batch."""
+        from evidence_agent.database.connection import get_connection
+        from evidence_agent.review.packet import generate_review_packet
+
+        paths1 = generate_review_packet("RUN-rb1")
+
+        # Change one claim's paraphrase
+        with get_connection() as conn:
+            conn.execute(
+                "UPDATE source_claims SET faithful_paraphrase = 'Changed paraphrase' "
+                "WHERE claim_id = 'CLM-rb1'"
+            )
+
+        paths2 = generate_review_packet("RUN-rb1")
+
+        assert paths1["batch_id"] != paths2["batch_id"], (
+            "Expected different batch_id when claim content changes"
+        )
+        assert paths1["packet_sha256"] != paths2["packet_sha256"]
+
+    def test_packet_order_is_deterministic(self, setup):
+        """Rows in the packet should be deterministically ordered."""
+        from evidence_agent.review.packet import generate_review_packet
+
+        paths1 = generate_review_packet("RUN-rb1")
+        paths2 = generate_review_packet("RUN-rb1")
+
+        with open(paths1["csv"], encoding="utf-8") as f:
+            rows1 = list(csv.DictReader(f))
+        with open(paths2["csv"], encoding="utf-8") as f:
+            rows2 = list(csv.DictReader(f))
+
+        ids1 = [r["claim_id"] for r in rows1]
+        ids2 = [r["claim_id"] for r in rows2]
+        assert ids1 == ids2, (
+            f"Row order must be deterministic. Got {ids1} vs {ids2}"
+        )
+
+    def test_csv_contains_batch_row_hashes(self, setup):
+        """CSV must include review_batch_id, review_row_id, and hashes."""
+        from evidence_agent.review.packet import generate_review_packet
+
+        paths = generate_review_packet("RUN-rb1")
+
+        with open(paths["csv"], encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        for row in rows:
+            assert row.get("review_batch_id"), "Missing review_batch_id in CSV row"
+            assert row.get("review_row_id"), "Missing review_row_id in CSV row"
+            assert row.get("row_input_sha256"), "Missing row_input_sha256"
+            assert row.get("packet_sha256"), "Missing packet_sha256"
+            assert row.get("run_id"), "Missing run_id"
+
+    def test_decision_batch_row_unique_constraint(self, setup):
+        """UNIQUE(review_batch_id, review_row_id) should be in place."""
+        from evidence_agent.database.connection import get_connection
+
+        with get_connection(read_only=True) as conn:
+            cursor = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' "
+                "AND name='idx_review_decisions_batch_row'"
+            )
+            idx = cursor.fetchone()
+
+        assert idx is not None, (
+            "FLAW: idx_review_decisions_batch_row index not found. "
+            "Missing migration 005_or equivalent."
+        )
+
+    def test_jsonl_contains_batch_info(self, setup):
+        """JSONL rows should include batch and row IDs."""
+        from evidence_agent.review.packet import generate_review_packet
+
+        paths = generate_review_packet("RUN-rb1")
+
+        with open(paths["jsonl"], encoding="utf-8") as f:
+            for line in f:
+                row = json.loads(line)
+                assert "review_batch_id" in row, "JSONL row missing review_batch_id"
+                assert "review_row_id" in row, "JSONL row missing review_row_id"
+                assert "row_input_sha256" in row
+                assert "packet_sha256" in row

@@ -208,9 +208,6 @@ def parse(source_id: str) -> None:
     except Exception as e:
         typer.echo(f"Parse failed: {e}", err=True)
         raise typer.Exit(code=4) from e
-    except Exception as e:
-        typer.echo(f"Parse failed: {e}", err=True)
-        raise typer.Exit(code=4) from e
 
 
 # ── Review sub-commands ────────────────────────────────

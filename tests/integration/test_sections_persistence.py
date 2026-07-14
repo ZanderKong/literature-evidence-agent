@@ -57,8 +57,8 @@ class TestSectionsPersistence:
 
     def test_analyse_does_not_persist_sections_to_db(self, setup):
         """After analyse, source_sections DB table should have data."""
-        from evidence_agent.database.connection import get_connection
         from evidence_agent.application.analyse import analyse_source
+        from evidence_agent.database.connection import get_connection
 
         analyse_source("SRC-test-sec", provider_name="mock")
 

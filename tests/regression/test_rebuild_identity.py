@@ -8,7 +8,6 @@ The current rebuild_from_packages implementation loses:
 """
 
 import json
-from pathlib import Path
 
 import pytest
 

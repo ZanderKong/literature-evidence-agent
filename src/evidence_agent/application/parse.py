@@ -7,7 +7,6 @@ Replaces raw parse_pdf() calls in both CLI and analyse flows.
 import hashlib
 import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
 from evidence_agent.database.connection import get_connection, transaction
@@ -88,7 +87,6 @@ def parse_source(
         )
 
     sections = parse_result["sections"]
-    pages = parse_result["pages"]
     quality = parse_result["quality"]
 
     # Persist sections to DB

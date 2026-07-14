@@ -308,9 +308,8 @@ def analyse_source(
 
         # 16. Update task status
         if task_id:
-            from evidence_agent.database.repositories import update_task_status
-            new_status = "review" if persisted_count > 0 else "completed"
-            update_task_status(task_id, new_status)
+            from evidence_agent.database.repositories import refresh_task_status
+            refresh_task_status(task_id)
 
         return {
             "run_id": run_id,

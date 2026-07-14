@@ -188,6 +188,27 @@ def apply_review_csv(csv_path: Path) -> dict[str, Any]:
                 _update_batch_row_applied(conn, batch_id, row_id, now)
                 _update_batch_status(conn, batch_id)
 
+    # Refresh task status if any batch had a task
+    if batch_mode and plans:
+        from evidence_agent.database.repositories import refresh_task_status
+        batch_ids = set()
+        for plan in plans:
+            bid = plan.get("review_batch_id", "")
+            if bid:
+                batch_ids.add(bid)
+        if batch_ids:
+            with get_connection(read_only=True) as conn:
+                placeholders = ",".join("?" * len(batch_ids))
+                rows = conn.execute(
+                    f"SELECT DISTINCT r.task_id FROM review_batches b "
+                    f"JOIN processing_runs r ON b.run_id = r.run_id "
+                    f"WHERE b.review_batch_id IN ({placeholders}) "
+                    f"AND r.task_id IS NOT NULL",
+                    tuple(batch_ids),
+                ).fetchall()
+                for row in rows:
+                    refresh_task_status(row["task_id"])
+
     return report
 
 

@@ -87,3 +87,60 @@ def update_task_status(task_id: str, status: str) -> None:
             "UPDATE research_tasks SET status = ?, updated_at = ? WHERE task_id = ?",
             (status, now_iso(), task_id),
         )
+
+
+def derive_task_status(task_id: str) -> str:
+    """Derive task status from claims review state across all runs.
+
+    Rules:
+    - Any pending / needs_followup claim → review
+    - All successful claims terminal → completed
+    - All runs failed → failed
+    - Some success, some failed → based on successful claims
+    - 0 claims on success → completed
+    """
+    with get_connection(read_only=True) as conn:
+        cursor = conn.execute(
+            "SELECT run_id, status FROM processing_runs WHERE task_id = ?",
+            (task_id,),
+        )
+        runs = [(r["run_id"], r["status"]) for r in cursor.fetchall()]
+
+        if not runs:
+            return "running"
+
+        all_failed = all(status == "failed" for _, status in runs)
+        if all_failed:
+            return "failed"
+
+        cursor = conn.execute(
+            "SELECT c.record_review_status "
+            "FROM source_claims c "
+            "JOIN processing_runs r ON c.created_by_run_id = r.run_id "
+            "WHERE r.task_id = ?",
+            (task_id,),
+        )
+        statuses = [r["record_review_status"] for r in cursor.fetchall()]
+
+        if not statuses:
+            return "completed"
+
+        pending_states = {"pending", "needs_followup"}
+        terminal_states = {"approved", "approved_with_edits", "rejected"}
+
+        any_pending = any(s in pending_states for s in statuses)
+        all_terminal = all(s in terminal_states for s in statuses)
+
+        if any_pending:
+            return "review"
+        if all_terminal:
+            return "completed"
+
+        return "review"
+
+
+def refresh_task_status(task_id: str) -> str:
+    """Derive and update task status. Returns the new status."""
+    status = derive_task_status(task_id)
+    update_task_status(task_id, status)
+    return status

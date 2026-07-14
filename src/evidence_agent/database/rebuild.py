@@ -1,15 +1,31 @@
-"""Database rebuild from source packages.
+"""Database rebuild from source package snapshots.
 
-Rebuilds the entire database by scanning all source packages
-under the sources directory and importing their data.
+Reads from C01 snapshot structure or falls back to old structure.
+Preflight all packages first, then build in temp DB,
+verify integrity, and atomically replace target.
 """
 
 import json
+import shutil
+import sqlite3
 from pathlib import Path
 from typing import Any
 
 from evidence_agent.database.connection import transaction
 from evidence_agent.runtime import get_current_context
+
+
+class RebuildConflictError(Exception):
+    """Same ID, different content between packages."""
+
+
+TABLE_IMPORT_ORDER = [
+    "research_tasks", "sources", "source_assets", "source_sections",
+    "processing_runs", "source_claims", "claim_locators",
+    "entities", "claim_entity_links",
+    "review_batches", "review_batch_rows",
+    "review_decisions", "claim_revisions",
+]
 
 
 def rebuild_from_packages(
@@ -18,15 +34,7 @@ def rebuild_from_packages(
     *,
     replace: bool = False,
 ) -> dict[str, Any]:
-    """Rebuild database from all source packages.
-
-    Args:
-        source_dir: Path to sources/ directory. If None, uses current context.
-        target_db: Path to target database file. If None, uses current context.
-        replace: Must be True to overwrite an existing target DB.
-
-    Returns rebuild report with counts.
-    """
+    """Rebuild database from all source package snapshots."""
     runtime = get_current_context()
 
     if source_dir is None:
@@ -40,52 +48,348 @@ def rebuild_from_packages(
     if not source_dir.exists():
         raise FileNotFoundError(f"Sources directory not found: {source_dir}")
 
-    if target_db.exists() and not replace:
-        raise FileExistsError(
-            f"Target database {target_db} already exists. "
-            f"Use replace=True to overwrite."
-        )
+    if target_db.exists():
+        if not replace:
+            raise FileExistsError(
+                f"Target database {target_db} already exists. "
+                f"Use replace=True to overwrite."
+            )
+        backup = target_db.with_suffix(".sqlite.bak")
+        shutil.copy2(str(target_db), str(backup))
 
     target_db.parent.mkdir(parents=True, exist_ok=True)
 
-    from evidence_agent.database.migrations import migrate
-    migrate(target_db)
+    temp_db = target_db.with_suffix(".tmp.sqlite")
+    if temp_db.exists():
+        temp_db.unlink()
 
     report: dict[str, Any] = {
         "target_db": str(target_db),
-        "sources_imported": 0,
-        "sections_imported": 0,
-        "claims_imported": 0,
-        "locators_imported": 0,
-        "runs_imported": 0,
-        "decisions_imported": 0,
-        "revisions_imported": 0,
-        "errors": [],
+        "sources_imported": 0, "sections_imported": 0,
+        "claims_imported": 0, "locators_imported": 0,
+        "runs_imported": 0, "decisions_imported": 0,
+        "revisions_imported": 0, "batches_imported": 0,
+        "batch_rows_imported": 0, "entities_imported": 0,
+        "links_imported": 0, "tasks_imported": 0,
+        "assets_imported": 0,
+        "conflicts": [], "errors": [],
+        "integrity": None, "foreign_keys": None,
     }
 
-    # Scan all package directories
-    for pkg_dir in sorted(source_dir.iterdir()):
-        if not pkg_dir.is_dir():
-            continue
+    try:
+        from evidence_agent.database.migrations import migrate
+        migrate(temp_db)
 
-        manifest_path = pkg_dir / "manifest.json"
-        if not manifest_path.exists():
-            continue
+        packages = _preflight_packages(source_dir, report)
+        _import_all_packages(packages, temp_db, report)
+        _rebuild_fts_on_target(temp_db)
 
-        try:
-            manifest = json.loads(manifest_path.read_text())
-            _import_package(pkg_dir, manifest, target_db, report)
-        except Exception as e:
-            report["errors"].append(f"{pkg_dir.name}: {e}")
+        conn = sqlite3.connect(str(temp_db))
+        cur = conn.execute("PRAGMA integrity_check")
+        report["integrity"] = cur.fetchone()[0]
+        cur = conn.execute("PRAGMA foreign_key_check")
+        fk = cur.fetchall()
+        report["foreign_keys"] = "ok" if not fk else str(len(fk))
+        conn.close()
 
-    # Rebuild FTS on target
-    _rebuild_fts_on_target(target_db)
+        shutil.copy2(str(temp_db), str(target_db))
+    except RebuildConflictError:
+        if temp_db.exists():
+            temp_db.unlink()
+        raise
+    except Exception:
+        if temp_db.exists():
+            temp_db.unlink()
+        raise
+    finally:
+        if temp_db.exists():
+            temp_db.unlink()
 
     return report
 
 
+def _preflight_packages(
+    source_dir: Path, report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Scan packages, validate, detect ID conflicts."""
+    packages = []
+    seen_ids: dict[str, dict[str, str]] = {}
+
+    for pkg_dir in sorted(source_dir.iterdir()):
+        if not pkg_dir.is_dir():
+            continue
+        pkg = _try_new_snapshot(pkg_dir, seen_ids, report)
+        if pkg is None:
+            pkg = _try_old_structure(pkg_dir, seen_ids, report)
+        if pkg is None:
+            continue
+        packages.append(pkg)
+
+    conflict_msgs = [c for c in report["conflicts"] if "RESTORE_CONFLICT" in c]
+    if conflict_msgs:
+        raise RebuildConflictError(
+            f"Preflight: {len(conflict_msgs)} RESTORE_CONFLICT(s) found"
+        )
+    return packages
+
+
+def _try_new_snapshot(
+    pkg_dir: Path, seen_ids: dict[str, dict[str, str]], report: dict[str, Any],
+) -> dict[str, Any] | None:
+    current_path = pkg_dir / "state" / "current.json"
+    if not current_path.exists():
+        return None
+    cur = json.loads(current_path.read_text())
+    snap_id = cur.get("snapshot_id")
+    if not snap_id:
+        return None
+    snap_dir = pkg_dir / "state" / "snapshots" / snap_id
+    manifest_path = snap_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text())
+    records_dir = snap_dir / "records"
+    if not records_dir.exists():
+        return None
+    source_id = manifest.get("source_id", pkg_dir.name)
+    _preflight_records(records_dir, source_id, seen_ids, report)
+    return {"source_id": source_id, "records_dir": records_dir}
+
+
+def _try_old_structure(
+    pkg_dir: Path, seen_ids: dict[str, dict[str, str]], report: dict[str, Any],
+) -> dict[str, Any] | None:
+    manifest_path = pkg_dir / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    manifest = json.loads(manifest_path.read_text())
+    source_id = manifest.get("source_id", pkg_dir.name)
+
+    records_dir = pkg_dir / "_import_records"
+    records_dir.mkdir(exist_ok=True)
+    _convert_old_to_records(pkg_dir, manifest, records_dir)
+    _preflight_records(records_dir, source_id, seen_ids, report)
+    return {"source_id": source_id, "records_dir": records_dir}
+
+
+def _convert_old_to_records(
+    pkg_dir: Path, manifest: dict[str, Any], records_dir: Path,
+) -> None:
+    """Convert old package files to C01-style records."""
+    manifest["origin_scope"] = "external"
+    manifest["scientific_verification_status"] = "unverified"
+
+    src_file = records_dir / "sources.jsonl"
+    if not src_file.exists():
+        src_file.write_text(json.dumps(manifest, ensure_ascii=False) + "\n",
+                            encoding="utf-8")
+
+    sections = pkg_dir / "parsed" / "sections.jsonl"
+    dst = records_dir / "source_sections.jsonl"
+    if sections.exists() and not dst.exists():
+        shutil.copy2(str(sections), str(dst))
+
+    claims = pkg_dir / "analysis" / "claims.persisted.jsonl"
+    run_dir = pkg_dir / "analysis" / "runs"
+    if run_dir.exists():
+        for rd in sorted(run_dir.iterdir()):
+            if rd.is_dir():
+                cp = rd / "claims.persisted.jsonl"
+                if cp.exists():
+                    claims = cp
+                    break
+    dst = records_dir / "source_claims.jsonl"
+    if claims.exists() and not dst.exists():
+        shutil.copy2(str(claims), str(dst))
+
+    runs = pkg_dir / "provenance" / "processing_runs.jsonl"
+    dst = records_dir / "processing_runs.jsonl"
+    if runs.exists() and not dst.exists():
+        shutil.copy2(str(runs), str(dst))
+
+    dec = pkg_dir / "review" / "decisions.jsonl"
+    dst = records_dir / "review_decisions.jsonl"
+    if dec.exists() and not dst.exists():
+        shutil.copy2(str(dec), str(dst))
+
+    rev = pkg_dir / "review" / "revisions.jsonl"
+    dst = records_dir / "claim_revisions.jsonl"
+    if rev.exists() and not dst.exists():
+        shutil.copy2(str(rev), str(dst))
+
+
+def _preflight_records(
+    records_dir: Path, source_id: str,
+    seen_ids: dict[str, dict[str, str]], report: dict[str, Any],
+) -> None:
+    for rec_file in sorted(records_dir.iterdir()):
+        if not rec_file.name.endswith(".jsonl"):
+            continue
+        table = rec_file.stem
+        for line in rec_file.read_text(encoding="utf-8").strip().split("\n"):
+            if not line:
+                continue
+            row = json.loads(line)
+            pk = _find_pk(table, row)
+            if not pk:
+                continue
+            key = f"{table}:{pk}"
+            crc = json.dumps(row, sort_keys=True, ensure_ascii=False)
+            existing = seen_ids.get(key)
+            if existing is not None:
+                if existing["crc"] != crc:
+                    report["conflicts"].append(
+                        f"RESTORE_CONFLICT: {key} in "
+                        f"{existing['source']} and {source_id}"
+                    )
+                else:
+                    report["conflicts"].append(f"DUPLICATE_IDENTICAL: {key} (ok)")
+            else:
+                seen_ids[key] = {"source": source_id, "crc": crc}
+
+
+def _import_all_packages(
+    packages: list[dict[str, Any]], target_db: Path, report: dict[str, Any],
+) -> None:
+    for pkg in packages:
+        _import_one_package(pkg, target_db, report)
+
+
+def _import_one_package(
+    pkg: dict[str, Any], target_db: Path, report: dict[str, Any],
+) -> None:
+    """Import records in dependency order. No INSERT OR IGNORE."""
+    records_dir = pkg["records_dir"]
+    source_id = pkg["source_id"]
+
+    with transaction(target_db) as conn:
+        locator_rows: list[dict[str, Any]] = []
+
+        for table in TABLE_IMPORT_ORDER:
+            rec_file = records_dir / f"{table}.jsonl"
+            if not rec_file.exists():
+                if table == "claim_locators" and locator_rows:
+                    _insert_rows(conn, table, locator_rows, report)
+                    locator_rows = []
+                continue
+            rows = [
+                json.loads(line)
+                for line in rec_file.read_text(encoding="utf-8").strip().split("\n")
+                if line.strip()
+            ]
+            if not rows:
+                continue
+
+            for row in rows:
+                if table in ("sources", "source_assets", "source_sections",
+                             "processing_runs", "source_claims",
+                             "review_batches"):
+                    row.setdefault("source_id", source_id)
+
+                if table == "source_claims":
+                    loc_id = row.pop("locator_id", None) or f"LOC-{row.get('claim_id','')}"
+                    loc_row = {
+                        "locator_id": loc_id,
+                        "claim_id": row.get("claim_id", row.get("_claim_id", "")),
+                        "page": row.pop("page", None),
+                        "figure_label": row.pop("figure_label", None),
+                        "table_label": row.pop("table_label", None),
+                        "locator_confidence": row.pop("locator_confidence", "medium"),
+                    }
+                    locator_rows.append(loc_row)
+
+                row = _adapt_row(table, row)
+                if not row:
+                    continue
+                pk = _find_pk(table, row)
+                if pk:
+                    c = conn.execute(
+                        f"SELECT COUNT(*) FROM \"{table}\" "
+                        f"WHERE \"{_pk_column(table)}\" = ?",
+                        (pk,),
+                    ).fetchone()
+                    if c[0] > 0:
+                        continue
+                cols = list(row.keys())
+                plc = ", ".join("?" * len(cols))
+                cq = ", ".join(f"\"{c}\"" for c in cols)
+                vals = list(row.values())
+                conn.execute(
+                    f"INSERT INTO \"{table}\" ({cq}) VALUES ({plc})", vals,
+                )
+
+            if table == "claim_locators":
+                _insert_rows(conn, table, locator_rows, report)
+                locator_rows = []
+
+
+def _insert_rows(
+    conn: Any, table: str, rows: list[dict[str, Any]], report: dict[str, Any],
+) -> None:
+    imported = 0
+    for row in rows:
+        row = _adapt_row(table, row)
+        pk = _find_pk(table, row)
+        if pk:
+            c = conn.execute(
+                f"SELECT COUNT(*) FROM \"{table}\" "
+                f"WHERE \"{_pk_column(table)}\" = ?",
+                (pk,),
+            ).fetchone()
+            if c[0] > 0:
+                continue
+        cols = list(row.keys())
+        plc = ", ".join("?" * len(cols))
+        cq = ", ".join(f"\"{c}\"" for c in cols)
+        vals = list(row.values())
+        conn.execute(f"INSERT INTO \"{table}\" ({cq}) VALUES ({plc})", vals)
+        imported += 1
+    _increment_report(report, table, imported)
+
+
+def _adapt_row(table: str, row: dict[str, Any]) -> dict[str, Any]:
+    """Adapt row for a specific table, removing invalid columns."""
+    if table == "sources":
+        row.setdefault("origin_scope", "external")
+        row.setdefault("scientific_verification_status", "unverified")
+        row.pop("assets", None)
+        row.pop("last_analysis", None)
+    elif table == "source_claims":
+        if "claim_id" not in row and "_claim_id" in row:
+            row["claim_id"] = row["_claim_id"]
+        if "created_by_run_id" not in row:
+            row["created_by_run_id"] = row.pop("run_id", "")
+        for k in ["_claim_id", "locator_hint", "locator_id", "_quote_match_status",
+                   "_block_page_start", "_record_review_status", "page",
+                   "figure_label", "table_label", "locator_confidence",
+                   "schema_version", "run_id"]:
+            row.pop(k, None)
+        row.setdefault("origin_scope", "external")
+        row.setdefault("scientific_verification_status", "unverified")
+        row.setdefault("record_review_status", "pending")
+        row.setdefault("quote_match_status", "exact")
+    elif table == "claim_locators":
+        if "locator_id" not in row:
+            row["locator_id"] = f"LOC-{row.get('claim_id', 'unknown')}"
+        row.setdefault("locator_confidence", "medium")
+    elif table == "review_decisions":
+        row.setdefault("object_type", "claim")
+        row.setdefault("original_content_json", "{}")
+        row.setdefault("reviewer", "unknown")
+    elif table == "claim_revisions":
+        row.setdefault("previous_content_json", "{}")
+        row.setdefault("new_content_json", "{}")
+        row.setdefault("changed_by", "unknown")
+    elif table == "processing_runs":
+        row.setdefault("module_name", "analyse")
+        row.setdefault("model_name", "mock")
+        row.setdefault("input_hash", "")
+        row.setdefault("output_hash", "")
+        row.setdefault("status", "completed")
+    return row
+
+
 def _rebuild_fts_on_target(target_db: Path) -> None:
-    """Rebuild FTS indices on the target database."""
     with transaction(target_db) as conn:
         conn.execute("DELETE FROM claim_fts")
         conn.execute("DELETE FROM source_fts")
@@ -102,235 +406,35 @@ def _rebuild_fts_on_target(target_db: Path) -> None:
         )
 
 
-def _import_package(
-    pkg_dir: Path, manifest: dict[str, Any], target_db: Path, report: dict[str, Any]
-) -> None:
-    """Import a single package into the database."""
-    source_id = manifest["source_id"]
+def _find_pk(table: str, row: dict[str, Any]) -> Any:
+    pk_col = _pk_column(table)
+    return row.get(pk_col) if pk_col else None
 
-    with transaction(target_db) as conn:
-        # Source
-        conn.execute(
-            "INSERT OR IGNORE INTO sources (source_id, source_type, title, "
-            "original_file_sha256, origin_scope, scientific_verification_status, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, 'external', 'unverified', "
-            "?, ?)",
-            (
-                source_id,
-                manifest.get("source_type", "journal_article"),
-                manifest.get("title"),
-                manifest.get("original_file_sha256", ""),
-                manifest.get("created_at", ""),
-                manifest.get("updated_at", ""),
-            ),
-        )
-        report["sources_imported"] += 1
 
-        # Assets
-        for asset in manifest.get("assets", []):
-            conn.execute(
-                "INSERT OR IGNORE INTO source_assets (asset_id, source_id, "
-                "asset_type, relative_path, mime_type, sha256, file_size, "
-                "acquired_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    asset.get("asset_id", ""),
-                    source_id,
-                    asset.get("asset_type", "main_document"),
-                    asset.get("relative_path", ""),
-                    asset.get("mime_type", "application/pdf"),
-                    asset.get("sha256", ""),
-                    asset.get("file_size", 0),
-                    manifest.get("created_at", ""),
-                ),
-            )
+def _pk_column(table: str) -> str:
+    pk_map = {
+        "research_tasks": "task_id", "sources": "source_id",
+        "source_assets": "asset_id", "source_sections": "section_id",
+        "processing_runs": "run_id", "source_claims": "claim_id",
+        "claim_locators": "locator_id", "entities": "entity_id",
+        "claim_entity_links": "link_id", "review_batches": "review_batch_id",
+        "review_batch_rows": "review_row_id", "review_decisions": "review_id",
+        "claim_revisions": "revision_id",
+    }
+    return pk_map.get(table, "rowid")
 
-        # Sections from parsed/sections.jsonl
-        sections_path = pkg_dir / "parsed" / "sections.jsonl"
-        if sections_path.exists():
-            seq = 0
-            for line in sections_path.read_text().strip().split("\n"):
-                if not line:
-                    continue
-                sec = json.loads(line)
-                seq += 1
-                section_id = f"SEC-{source_id}-{seq:04d}"
-                conn.execute(
-                    "INSERT OR IGNORE INTO source_sections "
-                    "(section_id, source_id, section_type, heading, "
-                    "page_start, page_end, sequence_number, text, "
-                    "parser_name, parser_version, text_sha256) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        section_id,
-                        source_id,
-                        sec.get("section_type", "body"),
-                        sec.get("heading"),
-                        sec.get("page_start"),
-                        sec.get("page_end"),
-                        seq,
-                        sec.get("text", ""),
-                        "pdfplumber",
-                        "0.11.10",
-                        sec.get("text_sha256", ""),
-                    ),
-                )
-                report["sections_imported"] += 1
 
-        # Claims from analysis/claims.persisted.jsonl
-        claims_path = pkg_dir / "analysis" / "claims.persisted.jsonl"
-        run_claims_dir = pkg_dir / "analysis" / "runs"
-        if run_claims_dir.exists():
-            # Try per-run directory structure first
-            for run_dir in sorted(run_claims_dir.iterdir()):
-                if run_dir.is_dir():
-                    run_claims_path = run_dir / "claims.persisted.jsonl"
-                    if run_claims_path.exists():
-                        claims_path = run_claims_path
-                        break
-
-        if claims_path.exists():
-            for line in claims_path.read_text().strip().split("\n"):
-                if not line:
-                    continue
-                claim = json.loads(line)
-                claim_id = claim.get("claim_id") or claim.get("_claim_id", "")
-                if not claim_id:
-                    continue
-
-                locator = claim.get("locator_hint", {})
-                review_status = claim.get("record_review_status", "pending")
-
-                conn.execute(
-                    "INSERT OR IGNORE INTO source_claims "
-                    "(claim_id, source_id, claim_type, source_quote, "
-                    "faithful_paraphrase, evidence_basis_description, "
-                    "scope_description, author_hedging, origin_scope, "
-                    "record_review_status, scientific_verification_status, "
-                    "quote_match_status, created_by_run_id, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'external', ?, "
-                    "'unverified', ?, ?, ?, ?)",
-                    (
-                        claim_id,
-                        source_id,
-                        claim.get("claim_type", ""),
-                        claim.get("source_quote", ""),
-                        claim.get("faithful_paraphrase", ""),
-                        claim.get("evidence_basis_description", ""),
-                        claim.get("scope_description"),
-                        claim.get("author_hedging"),
-                        review_status,
-                        claim.get("quote_match_status", "exact"),
-                        claim.get("run_id") or claim.get("created_by_run_id") or "",
-                        claim.get("created_at", ""),
-                        claim.get("updated_at", ""),
-                    ),
-                )
-
-                # Locator — preserve original locator_id from persisted record
-                loc_id = claim.get("locator_id") or f"LOC-{claim_id}"
-                loc_page = locator.get("page") if locator else claim.get("page")
-                loc_fig = locator.get("figure_label") if locator else claim.get("figure_label")
-                loc_tbl = locator.get("table_label") if locator else claim.get("table_label")
-                loc_conf = claim.get("locator_confidence",
-                    "medium" if locator else "medium")
-
-                conn.execute(
-                    "INSERT OR IGNORE INTO claim_locators "
-                    "(locator_id, claim_id, page, figure_label, table_label, "
-                    "locator_confidence) VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        loc_id,
-                        claim_id,
-                        loc_page,
-                        loc_fig,
-                        loc_tbl,
-                        loc_conf,
-                    ),
-                )
-                report["claims_imported"] += 1
-                report["locators_imported"] += 1
-
-        # Processing runs from provenance
-        runs_path = pkg_dir / "provenance" / "processing_runs.jsonl"
-        if runs_path.exists():
-            for line in runs_path.read_text().strip().split("\n"):
-                if not line:
-                    continue
-                run = json.loads(line)
-                conn.execute(
-                    "INSERT OR IGNORE INTO processing_runs "
-                    "(run_id, task_id, source_id, module_name, model_name, "
-                    "model_mode, prompt_version, parser_name, parser_version, "
-                    "code_commit, input_hash, output_hash, "
-                    "status, started_at, completed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        run.get("run_id", ""),
-                        run.get("task_id"),
-                        run.get("source_id"),
-                        run.get("module_name", "analyse"),
-                        run.get("model_name"),
-                        run.get("model_mode"),
-                        run.get("prompt_version"),
-                        run.get("parser_name"),
-                        run.get("parser_version"),
-                        run.get("code_commit", ""),
-                        run.get("input_hash", ""),
-                        run.get("output_hash", ""),
-                        run.get("status", "completed"),
-                        run.get("started_at", ""),
-                        run.get("completed_at"),
-                    ),
-                )
-                report["runs_imported"] += 1
-
-        # Review decisions from review/decisions.jsonl (if snapshot exists)
-        decisions_path = pkg_dir / "review" / "decisions.jsonl"
-        if decisions_path.exists():
-            for line in decisions_path.read_text().strip().split("\n"):
-                if not line:
-                    continue
-                dec = json.loads(line)
-                conn.execute(
-                    "INSERT OR IGNORE INTO review_decisions "
-                    "(review_id, object_type, object_id, decision, "
-                    "original_content_json, edited_content_json, "
-                    "reviewer, review_reason, reviewed_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        dec.get("review_id", ""),
-                        dec.get("object_type", "claim"),
-                        dec.get("object_id", ""),
-                        dec.get("decision", ""),
-                        dec.get("original_content_json", "{}"),
-                        dec.get("edited_content_json"),
-                        dec.get("reviewer", "unknown"),
-                        dec.get("review_reason"),
-                        dec.get("reviewed_at", ""),
-                    ),
-                )
-                report["decisions_imported"] += 1
-
-        # Claim revisions from review/revisions.jsonl
-        revisions_path = pkg_dir / "review" / "revisions.jsonl"
-        if revisions_path.exists():
-            for line in revisions_path.read_text().strip().split("\n"):
-                if not line:
-                    continue
-                rev = json.loads(line)
-                conn.execute(
-                    "INSERT OR IGNORE INTO claim_revisions "
-                    "(revision_id, claim_id, previous_content_json, "
-                    "new_content_json, changed_by, change_reason, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        rev.get("revision_id", ""),
-                        rev.get("claim_id", ""),
-                        rev.get("previous_content_json", "{}"),
-                        rev.get("new_content_json", "{}"),
-                        rev.get("changed_by", "unknown"),
-                        rev.get("change_reason", ""),
-                        rev.get("created_at", ""),
-                    ),
-                )
-                report["revisions_imported"] += 1
+def _increment_report(report: dict[str, Any], table: str, count: int) -> None:
+    km = {
+        "research_tasks": "tasks_imported", "sources": "sources_imported",
+        "source_assets": "assets_imported", "source_sections": "sections_imported",
+        "processing_runs": "runs_imported", "source_claims": "claims_imported",
+        "claim_locators": "locators_imported", "entities": "entities_imported",
+        "claim_entity_links": "links_imported", "review_batches": "batches_imported",
+        "review_batch_rows": "batch_rows_imported",
+        "review_decisions": "decisions_imported",
+        "claim_revisions": "revisions_imported",
+    }
+    key = km.get(table)
+    if key:
+        report[key] = report.get(key, 0) + count

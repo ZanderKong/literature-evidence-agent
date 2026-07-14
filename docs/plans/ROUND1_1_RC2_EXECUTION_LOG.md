@@ -96,39 +96,86 @@
 
 ---
 
-## Current State Summary
+## FIX A07: RuntimeContext deterministic + reload-free
 
-- **Tests**: 147 passing / 7 failing (baseline: 122 passing)
-- **Ruff**: clean
+- Status: verified
+- Commits: 7eb388e, d257508, 9bc1c41, bd53aca
+- RuntimeContext with thread-local injection
+- get_explicit_context / clear_current_context
+- Context isolation tests with zero cross-leakage
+- No more importlib.reload in tests or source
+
+## FIX A04.1: Parse Application Service
+
+- Status: verified
+- Commits: 4c13559, ef2926e
+- parse_source() public application service
+- Sections persisted through parse service
+- CLI parse calls parse_service, not raw parser
+- Gate A2: parse service completes sections persistence gap
+
+---
+
+## [Superseded] Old state from ef2926e
+
+The following state was from commit 61baabb and is now superseded.
+Tests: 147 passing / 7 failing
+See current state below.
+
+---
+
+## Current State Summary (Phase H baseline: 3a077e0)
+
+- **Tests**: 169 passing / 3 failing
+- **Ruff**: 24 issues (fixable, addressed in Phase H cleanup)
 - **Mypy**: clean
 - **Migrations**: 4 versions (001 initial, 002 FTS, 003 constraints, 004 review_batches)
+- **Phase H committed**: H00 freeze, H01 .venv-rc2 cleanup, H02 WAL/SHM cleanup
 
-### Remaining Failures (known, can be addressed in next iteration)
+### Remaining Failures (all rebuild, mapped to Phase C)
 
-1. **E2E real pipeline (2)**: Config singleton doesn't propagate to all modules in test fixtures (need explicit DB path parameterization or dependency injection)
-2. **Rebuild identity (2)**: Rebuild regenerates locator IDs and doesn't restore review decisions/revisions
-3. **Rebuild complete state (1)**: Review decisions not imported from package during rebuild
-4. **Sections persistence (1)**: Test isolation issue — passes when run alone, fails in full suite due to config singleton state leakage
-5. **Sections persistence (1, parser test)**: Documents known gap — parse_pdf alone doesn't write to DB (only analyse flow does through _persist_sections)
+| # | Test Node | Root Cause | Mapped To |
+|---|-----------|-----------|-----------|
+| 1 | `test_rebuild_loses_review_decisions` | rebuild doesn't import review_decisions from package | C03 |
+| 2 | `test_rebuild_loses_locator_ids` | rebuild regenerates locator IDs | C03 |
+| 3 | `test_rebuild_does_not_restore_decisions_and_revisions` | rebuild doesn't restore decisions/revisions | C03 |
+
+### Status Markers
+
+```text
+A01 verified
+A02 verified
+A03 verified
+A04 verified
+A05 verified
+A06 verified
+A07 verified
+
+B01 provisional_verified
+B02 not_started
+B03 provisional_verified
+B04 not_started
+B05 not_started
+
+C01-C04 not_started
+D01 provisional
+D02-D04 not_started
+E01-E06 not_started
+```
 
 ### Hard Gate Status
 
 | # | Gate | Status |
 |---|------|--------|
-| 1 | DeepSeek response parsing | ✅ Pass (mock + parser) |
+| 1 | DeepSeek response parsing | ✅ Pass |
 | 2 | analyse entry point | ✅ Pass |
 | 3 | Tasks/sections/runs/claims/locators persistence | ✅ Pass |
 | 4 | Review export per run | ✅ Pass |
 | 5 | Edited quote/locator revalidation | ✅ Pass |
 | 6 | Approved/rejected FTS sync | ✅ Pass |
-| 7 | Package rebuild restores state | ⚠️ Partial (ID preservation not yet done) |
+| 7 | Package rebuild restores state | ❌ Fail (3 rebuild tests, mapped to Phase C) |
 | 8 | verify round1 — real checks | ✅ Pass |
-| 9 | E2E with real PDF and strong assertions | ⚠️ Partial (E2E tests need config fix) |
-| 10 | Golden Set bilingual | ⚠️ Not yet started |
+| 9 | E2E with real PDF and strong assertions | ⚠️ To be verified in D02 |
+| 10 | Golden Set bilingual | ⚠️ Not yet started (D03) |
 | 11 | External data isolation | ✅ Pass |
-| 12 | README/logs/reports consistent | ⚠️ Not yet updated |
-
-### Next Steps (remaining from plan)
-- FIX C01-C03: Package snapshot completeness and rebuild with ID preservation
-- FIX D02-D04: CLI E2E rewrite, Golden set expansion, DeepSeek API smoke
-- FIX E01-E05: GitHub Actions CI, docs update, execution log cleanup
+| 12 | README/logs/reports consistent | ⚠️ Not yet updated (Phase E) |

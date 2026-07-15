@@ -153,8 +153,8 @@ def _check_3_quote_traceability(report: VerifyReport, pdf_path: Path) -> None:
 def _check_4_review_workflow(report: VerifyReport, pdf_path: Path) -> None:
     t0 = time.time()
     try:
-        # Ensure mock provider returns all default claims regardless of quote
-        # content (real PDF may not contain exact mock quotes).
+        # Provide custom mock claims whose source_quote matches the
+        # real PDF text so that deterministic validation passes.
         import evidence_agent.extraction.provider as provider_mod
         from evidence_agent.application.analyse import analyse_source
         from evidence_agent.database.connection import get_connection
@@ -163,10 +163,53 @@ def _check_4_review_workflow(report: VerifyReport, pdf_path: Path) -> None:
         from evidence_agent.review.packet import generate_review_packet
         _orig_init = provider_mod.MockProvider.__init__
 
+        _verify_claims: list[dict[str, Any]] = [
+            {
+                "claim_type": "reported_result",
+                "source_quote": (
+                    "The solubility of curcumin increased from 0.6 microgram per mL "
+                    "to 3.2 mg per mL upon complexation with HP-beta-CD at a 1:2 "
+                    "molar ratio"
+                ),
+                "faithful_paraphrase": "溶解度数据。",
+                "evidence_basis_description": "实验数据。",
+                "scope_description": None,
+                "author_hedging": None,
+                "locator_hint": {"page": 1, "section_heading": "Abstract"},
+                "entities": [],
+            },
+            {
+                "claim_type": "author_interpretation",
+                "source_quote": (
+                    "suggests the aromatic ring is inserted into the hydrophobic "
+                    "cavity of HP-beta-CD"
+                ),
+                "faithful_paraphrase": "作者解释。",
+                "evidence_basis_description": "FT-IR数据。",
+                "scope_description": None,
+                "author_hedging": "suggests",
+                "locator_hint": {"page": 2, "section_heading": "Results"},
+                "entities": [],
+            },
+            {
+                "claim_type": "author_limitation",
+                "source_quote": (
+                    "in vitro results may not directly predict in vivo performance "
+                    "and further studies are warranted"
+                ),
+                "faithful_paraphrase": "局限性。",
+                "evidence_basis_description": "作者自述。",
+                "scope_description": None,
+                "author_hedging": "may not",
+                "locator_hint": {"page": 2, "section_heading": "Results"},
+                "entities": [],
+            },
+        ]
+
         def _patched_init(
             self: Any, fixed_claims: Any = None, *, check_quotes: bool = True,
         ) -> None:
-            _orig_init(self, fixed_claims, check_quotes=False)
+            _orig_init(self, _verify_claims, check_quotes=True)
 
         provider_mod.MockProvider.__init__ = _patched_init  # type: ignore[method-assign]
 

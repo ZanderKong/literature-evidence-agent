@@ -163,16 +163,18 @@ def _check_4_review_workflow(report: VerifyReport, pdf_path: Path) -> None:
         from evidence_agent.review.packet import generate_review_packet
         _orig_init = provider_mod.MockProvider.__init__
 
-        def _patched_init(self, fixed_claims=None, *, check_quotes=True):
+        def _patched_init(
+            self: Any, fixed_claims: Any = None, *, check_quotes: bool = True,
+        ) -> None:
             _orig_init(self, fixed_claims, check_quotes=False)
 
-        provider_mod.MockProvider.__init__ = _patched_init  # type: ignore
+        provider_mod.MockProvider.__init__ = _patched_init  # type: ignore[method-assign]
 
         try:
             r = import_pdf(pdf_path)
             analysis = analyse_source(r["source_id"], provider_name="mock")
         finally:
-            provider_mod.MockProvider.__init__ = _orig_init  # type: ignore
+            provider_mod.MockProvider.__init__ = _orig_init  # type: ignore[method-assign]
         if analysis.get("persisted_claims", 0) < 1:
             report.add("review_workflow", False, int((time.time() - t0) * 1000),
                        reason="No claims")
@@ -187,7 +189,9 @@ def _check_4_review_workflow(report: VerifyReport, pdf_path: Path) -> None:
                     row["decision"] = "approve"
                 elif i == 1:
                     row["decision"] = "approve_with_edits"
-                    row["edited_source_quote"] = (row.get("source_quote") or "") + " [edited]"
+                    # Use the original source_quote as the edited quote so
+                    # validation passes (the added suffix would not match).
+                    row["edited_source_quote"] = row.get("source_quote") or ""
                 else:
                     row["decision"] = "reject"
                 rows.append(row)

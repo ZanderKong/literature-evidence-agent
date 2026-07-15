@@ -28,6 +28,38 @@ v0.1.3 is a release engineering release. No core evidence-processing behavior ha
 
 ## Verification
 
-Remote CI status: pending
+### Local
+
+| Check | Result |
+|-------|--------|
+| pytest 3x | 215 passed, 0 failed |
+| Random seeds 1/2/3 | PASS |
+| Ruff src | PASS |
+| Mypy | PASS |
+| Golden fixture | PASS (all thresholds) |
+| Golden pipeline-smoke | PASS |
+| README smoke | PASS |
+| Verify round1 | PASS |
+| CLI E2E | PASS |
+| Release Gate (local) | PASS_OFFLINE_LIVE_BLOCKED |
+
+### Remote CI (GitHub Actions)
+
+| Job | Python 3.11 | Python 3.12 |
+|-----|-------------|-------------|
+| Lint (ruff) | PASS | PASS |
+| Type check (mypy) | PASS | PASS |
+| Run tests | PASS | PASS |
+| Golden fixture | PASS | PASS |
+| README smoke | PASS | PASS |
+| Release gate | PASS | PASS |
+| Live DeepSeek | skipped | skipped |
+
+CI run: https://github.com/ZanderKong/literature-evidence-agent/actions/runs/29381050753
+Commit: `36dc6d8`
+
+### Live DeepSeek
+
+BLOCKED_EXTERNAL — key not configured.
 
 RC tag: not yet created

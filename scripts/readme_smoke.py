@@ -6,7 +6,9 @@ and verifies all commands exit 0.
 """
 
 import argparse
+import csv
 import json
+import os
 import shutil
 import subprocess
 import sys

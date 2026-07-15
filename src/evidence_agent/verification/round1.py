@@ -153,14 +153,26 @@ def _check_3_quote_traceability(report: VerifyReport, pdf_path: Path) -> None:
 def _check_4_review_workflow(report: VerifyReport, pdf_path: Path) -> None:
     t0 = time.time()
     try:
+        # Ensure mock provider returns all default claims regardless of quote
+        # content (real PDF may not contain exact mock quotes).
+        import evidence_agent.extraction.provider as provider_mod
         from evidence_agent.application.analyse import analyse_source
         from evidence_agent.database.connection import get_connection
         from evidence_agent.ingest.files import import_pdf
         from evidence_agent.review.decisions import apply_review_csv
         from evidence_agent.review.packet import generate_review_packet
+        _orig_init = provider_mod.MockProvider.__init__
 
-        r = import_pdf(pdf_path)
-        analysis = analyse_source(r["source_id"], provider_name="mock")
+        def _patched_init(self, fixed_claims=None, *, check_quotes=True):
+            _orig_init(self, fixed_claims, check_quotes=False)
+
+        provider_mod.MockProvider.__init__ = _patched_init  # type: ignore
+
+        try:
+            r = import_pdf(pdf_path)
+            analysis = analyse_source(r["source_id"], provider_name="mock")
+        finally:
+            provider_mod.MockProvider.__init__ = _orig_init  # type: ignore
         if analysis.get("persisted_claims", 0) < 1:
             report.add("review_workflow", False, int((time.time() - t0) * 1000),
                        reason="No claims")

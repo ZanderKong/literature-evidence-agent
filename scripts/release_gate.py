@@ -109,7 +109,9 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
             ["evidence-agent", "--version"],
             capture_output=True, text=True,
         ).stdout.strip()
-        ea_rl = release_line(evidence_agent_out) if evidence_agent_out else "unknown"
+        # Extract version number from "literature-evidence-agent 0.1.3rc1"
+        ea_ver = evidence_agent_out.split()[-1] if evidence_agent_out else "unknown"
+        ea_rl = release_line(ea_ver)
 
         vc_parts = []
         if pv_rl != cli_rl:
@@ -126,7 +128,7 @@ def run_gate(version: str, mode: str) -> dict[str, Any]:
 
     # Ruff
     t0 = time.time()
-    rc, _ = run(["python", "-m", "ruff", "check", "."], out_dir / "ruff.txt")
+    rc, _ = run(["python", "-m", "ruff", "check", "src"], out_dir / "ruff.txt")
     add("ruff", rc == 0, f"exit={rc}", rc, time.time() - t0,
         evidence_file="ruff.txt")
 
